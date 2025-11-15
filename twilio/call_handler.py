@@ -293,10 +293,17 @@ def recording_complete():
         mp3_url = f'{recording_url}.mp3'
         local_filename = f'data/recordings/{recording_sid}.mp3'
         # Download recording to local file
-        file_data = requests.get(mp3_url).content
+        twilio_sid = os.getenv('TWILIO_SID', None)
+        twilio_token = os.getenv('TWILIO_TOKEN', None)
+        file_data = requests.get(mp3_url, auth=(twilio_sid, twilio_token))
+        logging.info(f'Content-Type received: {file_data.headers.get("Content-Type")}')
         with open(local_filename, 'wb') as f:
-            f.write(file_data)
+            f.write(file_data.content)
 
+        # Set ownership if specified
+        recording_uid = int(os.getenv('RECORDING_UID', '1000'))
+        recording_gid = int(os.getenv('RECORDING_GID', '1000'))
+        os.chown(local_filename, recording_uid, recording_gid)
         # Upload to Slack
         logging.info(f'Recording saved to {local_filename}, sending to Slack.')
         upload_voicemail(local_filename, call_from, call_to, time.time())

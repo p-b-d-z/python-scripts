@@ -1,4 +1,9 @@
 FROM python:3.12-alpine
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+
+RUN addgroup -g ${GROUP_ID} -S user \
+    && adduser -u ${USER_ID} -G user -S user
 
 COPY . .
 

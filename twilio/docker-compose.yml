@@ -38,12 +38,16 @@ services:
      container_name: ivr_flask
      command: python3 call_handler.py
      environment:
-       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
-       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-       SLACK_CHANNEL_ID: ${SLACK_CHANNEL_ID}
-       VALKEY_URL: redis://valkey:6379
-       FALLBACK_NUMBERS: +14802020751
-       AGENT_SESSION_TTL: 28800
+        SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
+        SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+        SLACK_CHANNEL_ID: ${SLACK_CHANNEL_ID}
+        VALKEY_URL: redis://valkey:6379
+        FALLBACK_NUMBERS: +14802020751
+        AGENT_SESSION_TTL: 28800
+        RECORDING_UID: ${RECORDING_UID:-1000}
+        RECORDING_GID: ${RECORDING_GID:-1000}
+        TWILIO_SID: ${TWILIO_SID}
+        TWILIO_TOKEN: ${TWILIO_TOKEN}
      volumes:
        - ./data:/data
      networks:
