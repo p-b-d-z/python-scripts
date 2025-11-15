@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SMS Consent Opt-In</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background: #f8f8f8; color: #222; margin: 0; padding: 0; }
+        .container { max-width: 500px; margin: 2em auto; background: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 3px 12px #ddd; }
+        label, p, a, ul { margin-bottom: 1em; display: block; }
+        button { padding: 0.7em 1.5em; background: #0070e0; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .privacy { font-size: 0.9em; color: #444; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>SMS Opt-In Consent</h1>
+    <p>
+        Receive helpful updates, reminders, and support information from <strong>Tier 3 Consulting, LLC</strong> via SMS.<br>
+        Message frequency may vary depending on your interaction (<em>typically 1-2 messages per inquiry</em>).<br>
+        Message and data rates may apply.
+    </p>
+    <form id="optin-form" action="/submit-optin" method="post">
+        <label>
+            <input type="checkbox" name="consent" id="consent" value="yes" required>
+            I consent to receive SMS messages from Your Company Name at the mobile number provided.
+        </label>
+        <button type="submit">Opt-In</button>
+    </form>
+    <ul>
+        <li>Text <strong>STOP</strong> to opt out at any time.</li>
+        <li>Text <strong>HELP</strong> for assistance.</li>
+    </ul>
+    <a class="privacy" href="/privacy-policy" target="_blank">View our Privacy Policy & Terms of Service</a>
+</div>
+</body>
+</html>

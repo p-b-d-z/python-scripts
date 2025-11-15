@@ -1,0 +1,28 @@
+---
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    external: false
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ivr_cloudflared
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TOKEN}
+    networks:
+      backend:
+        aliases:
+          - cloudflared
+      frontend:
+    restart: unless-stopped
+  flask:
+    image: ivr:local
+    container_name: ivr_flask
+    command: python3 call_handler.py
+    networks:
+      backend:
+        aliases:
+          - flask
+    restart: unless-stopped
