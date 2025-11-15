@@ -291,15 +291,15 @@ def recording_complete():
     response = VoiceResponse()
     if recording_url and recording_sid:
         mp3_url = f'{recording_url}.mp3'
-        local_filename = f'data/{recording_sid}.mp3'
+        local_filename = f'data/recordings/{recording_sid}.mp3'
         # Download recording to local file
         file_data = requests.get(mp3_url).content
         with open(local_filename, 'wb') as f:
             f.write(file_data)
 
         # Upload to Slack
+        logging.info(f'Recording saved to {local_filename}, sending to Slack.')
         upload_voicemail(local_filename, call_from, call_to, time.time())
-
         response.say(
             'Thank you for your message, we will get back to you shortly. Have a great day!',
             voice=ivr_voice,

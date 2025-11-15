@@ -132,6 +132,7 @@ def load_slack_users():
         for user in users:
             if user.get('deleted', False):
                 continue
+
             profile = user.get('profile', {})
             display_name = profile.get('real_name', '').strip()
             email = profile.get('email', '').strip()
@@ -155,12 +156,15 @@ def get_display_name(phone: str, email: str = None):
             display_name = redis_client.get(f'slack_user_phone:{phone}')
             if display_name:
                 return display_name
+
         if email:
             display_name = redis_client.get(f'slack_user_email:{email}')
             if display_name:
                 return display_name
+
     except Exception as e:
         logging.error(f'Failed to get display name from cache: {e}')
+
     return email if email else 'Unknown Agent'
 
 
@@ -170,8 +174,8 @@ def upload_voicemail(file_path: str, call_from: str, call_to: str, timestamp: fl
         logging.debug('Slack not configured, skipping voicemail upload')
         return
 
+    logging.info(f'Uploading voicemail to channel {slack_channel_id}')
     try:
-        logging.info(f'Uploading voicemail to channel {slack_channel_id}')
         dt = datetime.fromtimestamp(timestamp)
         formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S MST')
         initial_comment = f'Voicemail from {call_from} to {call_to} at {formatted_time}'
@@ -179,7 +183,7 @@ def upload_voicemail(file_path: str, call_from: str, call_to: str, timestamp: fl
             client.files_upload_v2(
                 channel=slack_channel_id,
                 file=file,
-                title='Voicemail',
+                title=f'Voicemail from {call_from}',
                 initial_comment=initial_comment,
             )
         logging.info(f'Uploaded voicemail to Slack: {initial_comment}')
