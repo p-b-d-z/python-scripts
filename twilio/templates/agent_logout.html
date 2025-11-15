@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Agent Logout</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <img src="/static/logo.png" alt="Tier 3 Consulting Logo" class="logo">
+            <h1>Agent Logout</h1>
+            <p>Securely log out from the IVR system</p>
+        </div>
+        <p>Enter your phone number to log out.</p>
+        <form method="post">
+            <div class="form-group">
+                <label for="phone_number">Phone Number:</label>
+                <input type="tel" id="phone_number" name="phone_number" placeholder="+1234567890" required>
+            </div>
+            <button type="submit" class="logout-button">Logout</button>
+        </form>
+        <div class="nav-links">
+            <a href="/auth/agent">Back to Login</a>
+        </div>
+    </div>
+</body>
+</html>

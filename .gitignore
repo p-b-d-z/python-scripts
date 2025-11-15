@@ -2,3 +2,8 @@
 .env
 # Recordings
 *.mp3
+twilio/data/recordings/*
+# pyCharm
+.idea*
+# Valkey
+twilio/data/valkey/*

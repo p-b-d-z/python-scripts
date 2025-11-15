@@ -1,305 +1,125 @@
-from flask import Flask, request, session, Response, render_template_string
+from flask import Flask, request, session, Response, render_template_string, redirect
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse, Gather
 import requests
 import logging
 import os
 import secrets
-from cache import Cache
+from datetime import datetime
+from call_helper import (
+    initialize_cache, is_opted_out, add_to_opt_out, remove_from_opt_out,
+    get_active_agents, agent_login, agent_logout, get_agent_status
+)
+from cloudflare import get_cloudflare_user
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
+app.static_folder = 'static'
 
 # Initialize cache
 valkey_url = os.getenv('VALKEY_URL', 'redis://localhost:6379')
-cache = Cache(valkey_url)
+agent_session_ttl = int(os.getenv('AGENT_SESSION_TTL', '28800'))  # 8 hours default
+initialize_cache(valkey_url, agent_session_ttl)
 
-# Load opt-out numbers from file on startup (migration/initialization)
-cache.load_opt_out_from_file()
+# Load HTML templates
+def load_template(filename):
+    """Load HTML template from file"""
+    try:
+        with open(f'templates/{filename}', 'r', encoding='utf-8') as html_file:
+            return html_file.read()
 
-with open('sms_consent.html', 'r', encoding='utf-8') as file:
-    html_consent_content = file.read()
+    except Exception as err:
+        logging.error(f"Error loading template {filename}: {err}")
+        return "<html><body>Error loading template</body></html>"
+
+# Load SMS consent from root directory (existing file)
+try:
+    with open('sms_consent.html', 'r', encoding='utf-8') as file:
+        html_consent_content = file.read()
+except Exception as e:
+    logging.error(f"Error loading sms_consent.html: {e}")
+    html_consent_content = "<html><body>Error loading consent page</body></html>"
+
+agent_login_template = load_template('agent_login.html')
+agent_login_error_template = load_template('agent_login_error.html')
+agent_login_success_template = load_template('agent_login_success.html')
+agent_logout_template = load_template('agent_logout.html')
+agent_logout_success_template = load_template('agent_logout_success.html')
+agent_error_template = load_template('agent_error.html')
+agent_status_template = load_template('agent_status.html')
+privacy_policy_template = load_template('privacy_policy.html')
 
 # Configuration
 ivr_voice = 'alice'
 language = 'en-US'
 fallback_numbers = os.getenv('FALLBACK_NUMBERS', '+14802020751').split(',')
-agent_session_ttl = int(os.getenv('AGENT_SESSION_TTL', '28800'))  # 8 hours default
 
-
-def validate_phone_number(phone_number):
-    """Validate and normalize US phone number to E.164 format (+1XXXXXXXXXX)"""
-    if not phone_number:
-        return None
-
-    # Check for invalid characters (only digits, spaces, dashes, dots, parentheses, and + allowed)
-    allowed_chars = set('0123456789 +-().')
-    if not all(c in allowed_chars for c in phone_number):
-        return None
-
-    # Remove all non-digit characters except +
-    cleaned = ''.join(c for c in phone_number if c.isdigit() or c == '+')
-
-    # Handle different input formats
-    if cleaned.startswith('+1'):
-        # Already in E.164 format
-        if len(cleaned) != 12:  # +1 + 10 digits
-            return None
-        digits_only = cleaned[2:]
-    elif len(cleaned) == 10:
-        # 10-digit US number without country code, add +1
-        cleaned = '+1' + cleaned
-        digits_only = cleaned[2:]
-    elif len(cleaned) == 11 and cleaned.startswith('1'):
-        # 11-digit number starting with 1, add +
-        cleaned = '+' + cleaned
-        digits_only = cleaned[2:]
-    else:
-        return None
-
-    # Ensure all characters are digits
-    if not all(c.isdigit() for c in digits_only):
-        return None
-
-    # Validate area code (first 3 digits): cannot start with 0 or 1
-    if digits_only[0] in ('0', '1'):
-        return None
-
-    # Validate exchange code (digits 4-6): cannot start with 0 or 1
-    if digits_only[3] in ('0', '1'):
-        return None
-
-    return cleaned
-
-def is_opted_out(phone_number):
-    """Check if phone number is opted out"""
-    validated = validate_phone_number(phone_number)
-    if not validated:
-        return False
-    return cache.is_opted_out(validated)
-
-def add_to_opt_out(phone_number):
-    """Add phone number to opt-out list"""
-    validated = validate_phone_number(phone_number)
-    if not validated:
-        return False
-    return cache.add_opt_out_number(validated)
-
-def remove_from_opt_out(phone_number):
-    """Remove phone number from opt-out list"""
-    validated = validate_phone_number(phone_number)
-    if not validated:
-        return False
-    return cache.remove_opt_out_number(validated)
-
-# Agent management functions
-def get_active_agents():
-    """Get list of active agent phone numbers"""
-    return cache.get_active_agents()
-
-def agent_login(phone_number):
-    """Log in an agent"""
-    validated = validate_phone_number(phone_number)
-    if not validated:
-        return False
-    return cache.agent_login(validated, agent_session_ttl)
-
-def agent_logout(phone_number):
-    """Log out an agent"""
-    validated = validate_phone_number(phone_number)
-    if not validated:
-        return False
-    return cache.agent_logout(validated)
-
-def is_agent_active(phone_number):
-    """Check if agent is active"""
-    validated = validate_phone_number(phone_number)
-    if not validated:
-        return False
-    return cache.is_agent_active(validated)
 
 @app.route('/')
 def home():
+    return redirect('/status/agents')
+
+@app.route('/consent')
+def consent():
     return render_template_string(html_consent_content)
+
+@app.route('/privacy-policy')
+def privacy_policy():
+    return render_template_string(privacy_policy_template)
 
 @app.route('/auth/agent', methods=['GET', 'POST'])
 def agent_auth():
+    whoami = get_cloudflare_user(request)
+    logging.info(f'Cloudflare user: {whoami}')
     if request.method == 'POST':
         phone_number = request.form.get('phone_number', '').strip()
 
         if not phone_number:
-            return render_template_string("""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Agent Login - Error</title>
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 40px; }
-                    .error { color: red; }
-                    .form-group { margin: 10px 0; }
-                    input { padding: 8px; width: 200px; }
-                    button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
-                    button:hover { background: #0056b3; }
-                </style>
-            </head>
-            <body>
-                <h1>Agent Login</h1>
-                <p class="error">Please enter a valid phone number.</p>
-                <form method="post">
-                    <div class="form-group">
-                        <label for="phone_number">Phone Number:</label><br>
-                        <input type="tel" id="phone_number" name="phone_number" placeholder="+1234567890" required>
-                    </div>
-                    <button type="submit">Login as Agent</button>
-                </form>
-            </body>
-            </html>
-            """)
+            return render_template_string(agent_login_error_template)
 
         # Validate and login agent
         if agent_login(phone_number):
-            return render_template_string("""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Agent Login - Success</title>
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 40px; }
-                    .success { color: green; }
-                </style>
-            </head>
-            <body>
-                <h1>Agent Login Successful</h1>
-                <p class="success">You are now logged in as an agent.</p>
-                <p>You will receive calls when available.</p>
-                <p><a href="/auth/agent/logout">Logout</a></p>
-            </body>
-            </html>
-            """)
+            return render_template_string(agent_login_success_template)
         else:
-            return render_template_string("""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Agent Login - Error</title>
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 40px; }
-                    .error { color: red; }
-                </style>
-            </head>
-            <body>
-                <h1>Agent Login Failed</h1>
-                <p class="error">Failed to log you in. Please try again.</p>
-                <p><a href="/auth/agent">Try Again</a></p>
-            </body>
-            </html>
-            """)
+            return render_template_string(agent_error_template.replace('{{ title }}', 'Agent Login Failed').replace('{{ message }}', 'Failed to log you in. Please try again.').replace('{{ link_url }}', '/auth/agent').replace('{{ link_text }}', 'Try Again'))
 
     # GET request - show login form
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Agent Login</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px; }
-            .form-group { margin: 10px 0; }
-            input { padding: 8px; width: 200px; }
-            button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
-            button:hover { background: #0056b3; }
-        </style>
-    </head>
-    <body>
-        <h1>Agent Login</h1>
-        <p>Enter your phone number to register as an available agent.</p>
-        <form method="post">
-            <div class="form-group">
-                <label for="phone_number">Phone Number:</label><br>
-                <input type="tel" id="phone_number" name="phone_number" placeholder="+1234567890" required>
-            </div>
-            <button type="submit">Login as Agent</button>
-        </form>
-    </body>
-    </html>
-    """)
+    return render_template_string(agent_login_template)
 
 @app.route('/auth/agent/logout', methods=['GET', 'POST'])
 def agent_logout_route():
     if request.method == 'POST':
         phone_number = request.form.get('phone_number', '').strip()
     else:
-        # For GET requests, we need a way to identify the agent
-        # For now, show a form to enter phone number
-        return render_template_string("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Agent Logout</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                .form-group { margin: 10px 0; }
-                input { padding: 8px; width: 200px; }
-                button { padding: 10px 20px; background: #dc3545; color: white; border: none; cursor: pointer; }
-                button:hover { background: #c82333; }
-            </style>
-        </head>
-        <body>
-            <h1>Agent Logout</h1>
-            <p>Enter your phone number to log out.</p>
-            <form method="post">
-                <div class="form-group">
-                    <label for="phone_number">Phone Number:</label><br>
-                    <input type="tel" id="phone_number" name="phone_number" placeholder="+1234567890" required>
-                </div>
-                <button type="submit">Logout</button>
-            </form>
-            <p><a href="/auth/agent">Back to Login</a></p>
-        </body>
-        </html>
-        """)
+        # For GET requests, show logout form
+        return render_template_string(agent_logout_template)
 
     if phone_number and agent_logout(phone_number):
-        return render_template_string("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Agent Logout - Success</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                .success { color: green; }
-            </style>
-        </head>
-        <body>
-            <h1>Agent Logout Successful</h1>
-            <p class="success">You have been logged out.</p>
-            <p><a href="/auth/agent">Login Again</a></p>
-        </body>
-        </html>
-        """)
+        return render_template_string(agent_logout_success_template)
     else:
-        return render_template_string("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Agent Logout - Error</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                .error { color: red; }
-            </style>
-        </head>
-        <body>
-            <h1>Agent Logout Failed</h1>
-            <p class="error">Failed to log you out. Please try again.</p>
-            <p><a href="/auth/agent/logout">Try Again</a></p>
-        </body>
-        </html>
-        """)
+        return render_template_string(agent_error_template.replace('{{ title }}', 'Agent Logout Failed').replace('{{ message }}', 'Failed to log you out. Please try again.').replace('{{ link_url }}', '/auth/agent/logout').replace('{{ link_text }}', 'Try Again'))
+
+@app.route('/status')
+def status_redirect():
+    return redirect('/status/agents')
+
+@app.route('/status/agent')
+def status_agent_redirect():
+    return redirect('/status/agents')
+
+@app.route('/status/agents')
+def agent_status():
+    """Display status of all active agents"""
+    agents = get_agent_status()
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # Render template with agent data
+    return render_template_string(agent_status_template, agents=agents, agent_count=len(agents), current_time=current_time)
 
 @app.route('/incoming/voice', methods=['POST'])
 def incoming_voice():
     response = VoiceResponse()
-    digit = request.form.get('Digits', '')
     logging.debug(f'/incoming/voice | form: {request.form}')
     call_to = request.form.get('Called', '')
     call_from = request.form.get('From', '')

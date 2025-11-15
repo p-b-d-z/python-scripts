@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Agent Status</title>
+    <meta http-equiv="refresh" content="30">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <img src="/static/logo.png" alt="Tier 3 Consulting Logo" class="logo">
+            <h1>Agent Status Dashboard</h1>
+            <p>Real-time overview of active agents</p>
+        </div>
+
+        <div class="status-info">
+            <strong>Active Agents:</strong> {{ agent_count }}<br>
+            <strong>Last Updated:</strong> {{ current_time }}
+        </div>
+
+        {% if agents %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Agent</th>
+                    <th>Phone Number</th>
+                    <th>Login Time</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for agent in agents %}
+                <tr>
+                    <td class="agent-name">{{ agent.name }}</td>
+                    <td class="phone-number">{{ agent.phone }}</td>
+                    <td class="login-time">{{ agent.login_time }}</td>
+                    <td class="duration">{{ agent.duration }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="no-agents">
+            <h3>No Active Agents</h3>
+            <p>There are currently no agents logged in to receive calls.</p>
+        </div>
+        {% endif %}
+
+        <div class="refresh-info">
+            This page automatically refreshes every 30 seconds.
+        </div>
+
+        <div class="nav-links">
+            <a href="/auth/agent">Agent Login</a>
+            <a href="/auth/agent/logout">Agent Logout</a>
+            <a href="/consent">Consent</a>
+            <a href="/">Home</a>
+        </div>
+    </div>
+</body>
+</html>
