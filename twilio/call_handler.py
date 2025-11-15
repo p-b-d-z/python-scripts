@@ -2,122 +2,299 @@ from flask import Flask, request, session, Response, render_template_string
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse, Gather
 import requests
-import hashlib
 import logging
 import os
 import secrets
+from cache import Cache
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
+
+# Initialize cache
+valkey_url = os.getenv('VALKEY_URL', 'redis://localhost:6379')
+cache = Cache(valkey_url)
+
+# Load opt-out numbers from file on startup (migration/initialization)
+cache.load_opt_out_from_file()
+
 with open('sms_consent.html', 'r', encoding='utf-8') as file:
     html_consent_content = file.read()
 
-# Opt-out management
-OPT_OUT_FILE = 'data/opt_out_numbers.txt'
-opt_out_cache = set()
-file_hash_cache = None
-# Defaults
+# Configuration
 ivr_voice = 'alice'
 language = 'en-US'
+fallback_numbers = os.getenv('FALLBACK_NUMBERS', '+14802020751').split(',')
+agent_session_ttl = int(os.getenv('AGENT_SESSION_TTL', '28800'))  # 8 hours default
 
 
 def validate_phone_number(phone_number):
-    """Validate and normalize phone number to E.164 format"""
+    """Validate and normalize US phone number to E.164 format (+1XXXXXXXXXX)"""
     if not phone_number:
         return None
+
+    # Check for invalid characters (only digits, spaces, dashes, dots, parentheses, and + allowed)
+    allowed_chars = set('0123456789 +-().')
+    if not all(c in allowed_chars for c in phone_number):
+        return None
+
     # Remove all non-digit characters except +
     cleaned = ''.join(c for c in phone_number if c.isdigit() or c == '+')
-    # Ensure it starts with + and has reasonable length
-    if not cleaned.startswith('+') or len(cleaned) < 10 or len(cleaned) > 15:
-        return None
-    return cleaned
 
-def load_opt_out_list():
-    """Load opt-out numbers from file and cache them"""
-    global opt_out_cache, file_hash_cache
-    try:
-        if os.path.exists(OPT_OUT_FILE):
-            with open(OPT_OUT_FILE, 'r', encoding='utf-8') as f:
-                content = f.read()
-                # Calculate file hash
-                current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-                if current_hash != file_hash_cache:
-                    # File has changed, reload cache
-                    numbers = set()
-                    for line in content.strip().split('\n'):
-                        line = line.strip()
-                        if line:
-                            validated = validate_phone_number(line)
-                            if validated:
-                                numbers.add(validated)
-                    opt_out_cache = numbers
-                    file_hash_cache = current_hash
-    except Exception as e:
-        # Log error but don't crash - continue with empty cache
-        print(f"Error loading opt-out list: {e}")
-        opt_out_cache = set()
-        file_hash_cache = None
+    # Handle different input formats
+    if cleaned.startswith('+1'):
+        # Already in E.164 format
+        if len(cleaned) != 12:  # +1 + 10 digits
+            return None
+        digits_only = cleaned[2:]
+    elif len(cleaned) == 10:
+        # 10-digit US number without country code, add +1
+        cleaned = '+1' + cleaned
+        digits_only = cleaned[2:]
+    elif len(cleaned) == 11 and cleaned.startswith('1'):
+        # 11-digit number starting with 1, add +
+        cleaned = '+' + cleaned
+        digits_only = cleaned[2:]
+    else:
+        return None
+
+    # Ensure all characters are digits
+    if not all(c.isdigit() for c in digits_only):
+        return None
+
+    # Validate area code (first 3 digits): cannot start with 0 or 1
+    if digits_only[0] in ('0', '1'):
+        return None
+
+    # Validate exchange code (digits 4-6): cannot start with 0 or 1
+    if digits_only[3] in ('0', '1'):
+        return None
+
+    return cleaned
 
 def is_opted_out(phone_number):
     """Check if phone number is opted out"""
     validated = validate_phone_number(phone_number)
     if not validated:
         return False
-    load_opt_out_list()  # Ensure cache is up to date
-    return validated in opt_out_cache
+    return cache.is_opted_out(validated)
 
 def add_to_opt_out(phone_number):
     """Add phone number to opt-out list"""
     validated = validate_phone_number(phone_number)
     if not validated:
         return False
-    try:
-        # Append to file
-        with open(OPT_OUT_FILE, 'a', encoding='utf-8') as f:
-            f.write(f"{validated}\n")
-        # Update cache immediately
-        opt_out_cache.add(validated)
-        # Invalidate hash cache so it reloads next time
-        global file_hash_cache
-        file_hash_cache = None
-        return True
-    except Exception as e:
-        print(f"Error adding to opt-out list: {e}")
-        return False
+    return cache.add_opt_out_number(validated)
 
 def remove_from_opt_out(phone_number):
     """Remove phone number from opt-out list"""
     validated = validate_phone_number(phone_number)
     if not validated:
         return False
-    try:
-        # Read current file
-        if os.path.exists(OPT_OUT_FILE):
-            with open(OPT_OUT_FILE, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+    return cache.remove_opt_out_number(validated)
 
-            # Filter out the number
-            filtered_lines = [line for line in lines if validate_phone_number(line.strip()) != validated]
+# Agent management functions
+def get_active_agents():
+    """Get list of active agent phone numbers"""
+    return cache.get_active_agents()
 
-            # Write back to file
-            with open(OPT_OUT_FILE, 'w', encoding='utf-8') as f:
-                f.writelines(filtered_lines)
-
-            # Update cache
-            if validated in opt_out_cache:
-                opt_out_cache.remove(validated)
-            # Invalidate hash cache
-            global file_hash_cache
-            file_hash_cache = None
-            return True
-    except Exception as e:
-        print(f"Error removing from opt-out list: {e}")
+def agent_login(phone_number):
+    """Log in an agent"""
+    validated = validate_phone_number(phone_number)
+    if not validated:
         return False
+    return cache.agent_login(validated, agent_session_ttl)
+
+def agent_logout(phone_number):
+    """Log out an agent"""
+    validated = validate_phone_number(phone_number)
+    if not validated:
+        return False
+    return cache.agent_logout(validated)
+
+def is_agent_active(phone_number):
+    """Check if agent is active"""
+    validated = validate_phone_number(phone_number)
+    if not validated:
+        return False
+    return cache.is_agent_active(validated)
 
 @app.route('/')
 def home():
     return render_template_string(html_consent_content)
+
+@app.route('/auth/agent', methods=['GET', 'POST'])
+def agent_auth():
+    if request.method == 'POST':
+        phone_number = request.form.get('phone_number', '').strip()
+
+        if not phone_number:
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Agent Login - Error</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; }
+                    .error { color: red; }
+                    .form-group { margin: 10px 0; }
+                    input { padding: 8px; width: 200px; }
+                    button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+                    button:hover { background: #0056b3; }
+                </style>
+            </head>
+            <body>
+                <h1>Agent Login</h1>
+                <p class="error">Please enter a valid phone number.</p>
+                <form method="post">
+                    <div class="form-group">
+                        <label for="phone_number">Phone Number:</label><br>
+                        <input type="tel" id="phone_number" name="phone_number" placeholder="+1234567890" required>
+                    </div>
+                    <button type="submit">Login as Agent</button>
+                </form>
+            </body>
+            </html>
+            """)
+
+        # Validate and login agent
+        if agent_login(phone_number):
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Agent Login - Success</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; }
+                    .success { color: green; }
+                </style>
+            </head>
+            <body>
+                <h1>Agent Login Successful</h1>
+                <p class="success">You are now logged in as an agent.</p>
+                <p>You will receive calls when available.</p>
+                <p><a href="/auth/agent/logout">Logout</a></p>
+            </body>
+            </html>
+            """)
+        else:
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Agent Login - Error</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; }
+                    .error { color: red; }
+                </style>
+            </head>
+            <body>
+                <h1>Agent Login Failed</h1>
+                <p class="error">Failed to log you in. Please try again.</p>
+                <p><a href="/auth/agent">Try Again</a></p>
+            </body>
+            </html>
+            """)
+
+    # GET request - show login form
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Agent Login</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            .form-group { margin: 10px 0; }
+            input { padding: 8px; width: 200px; }
+            button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+            button:hover { background: #0056b3; }
+        </style>
+    </head>
+    <body>
+        <h1>Agent Login</h1>
+        <p>Enter your phone number to register as an available agent.</p>
+        <form method="post">
+            <div class="form-group">
+                <label for="phone_number">Phone Number:</label><br>
+                <input type="tel" id="phone_number" name="phone_number" placeholder="+1234567890" required>
+            </div>
+            <button type="submit">Login as Agent</button>
+        </form>
+    </body>
+    </html>
+    """)
+
+@app.route('/auth/agent/logout', methods=['GET', 'POST'])
+def agent_logout_route():
+    if request.method == 'POST':
+        phone_number = request.form.get('phone_number', '').strip()
+    else:
+        # For GET requests, we need a way to identify the agent
+        # For now, show a form to enter phone number
+        return render_template_string("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Agent Logout</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .form-group { margin: 10px 0; }
+                input { padding: 8px; width: 200px; }
+                button { padding: 10px 20px; background: #dc3545; color: white; border: none; cursor: pointer; }
+                button:hover { background: #c82333; }
+            </style>
+        </head>
+        <body>
+            <h1>Agent Logout</h1>
+            <p>Enter your phone number to log out.</p>
+            <form method="post">
+                <div class="form-group">
+                    <label for="phone_number">Phone Number:</label><br>
+                    <input type="tel" id="phone_number" name="phone_number" placeholder="+1234567890" required>
+                </div>
+                <button type="submit">Logout</button>
+            </form>
+            <p><a href="/auth/agent">Back to Login</a></p>
+        </body>
+        </html>
+        """)
+
+    if phone_number and agent_logout(phone_number):
+        return render_template_string("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Agent Logout - Success</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .success { color: green; }
+            </style>
+        </head>
+        <body>
+            <h1>Agent Logout Successful</h1>
+            <p class="success">You have been logged out.</p>
+            <p><a href="/auth/agent">Login Again</a></p>
+        </body>
+        </html>
+        """)
+    else:
+        return render_template_string("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Agent Logout - Error</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .error { color: red; }
+            </style>
+        </head>
+        <body>
+            <h1>Agent Logout Failed</h1>
+            <p class="error">Failed to log you out. Please try again.</p>
+            <p><a href="/auth/agent/logout">Try Again</a></p>
+        </body>
+        </html>
+        """)
 
 @app.route('/incoming/voice', methods=['POST'])
 def incoming_voice():
@@ -151,7 +328,20 @@ def incoming_voice_menu():
         )
     else:
         response.say('I will now connect you to an agent, thank you for your patience!', voice=ivr_voice)
-        response.dial('+14802020751')
+
+        # Try to connect to an active agent first
+        active_agents = get_active_agents()
+        if active_agents:
+            # Use the first available agent (could implement round-robin later)
+            agent_number = active_agents[0]
+            logging.info(f'Connecting to active agent: {agent_number}')
+            response.dial(agent_number)
+        else:
+            # Fall back to configured fallback numbers
+            logging.info(f'No active agents, using fallback numbers: {fallback_numbers}')
+            # Dial the first fallback number (could implement simultaneous dialing later)
+            if fallback_numbers:
+                response.dial(fallback_numbers[0].strip())
 
     return Response(str(response), mimetype='text/xml')
 
@@ -241,7 +431,7 @@ def incoming_sms():
 
 
 @app.route("/status/message", methods=['POST'])
-def incoming_sms():
+def message_status():
     message_sid = request.values.get('MessageSid', None)
     message_status = request.values.get('MessageStatus', None)
     logging.info(f'SID: {message_sid}, Status: {message_status}')

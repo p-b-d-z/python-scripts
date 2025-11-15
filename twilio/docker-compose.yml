@@ -7,6 +7,22 @@ networks:
     external: false
 
 services:
+  valkey:
+    image: valkey/valkey:alpine
+    container_name: ivr_valkey
+    command: valkey-server --appendonly yes
+    volumes:
+      - ./data/valkey:/data
+    networks:
+      backend:
+        aliases:
+          - valkey
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: ivr_cloudflared
@@ -24,10 +40,16 @@ services:
     environment:
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      VALKEY_URL: redis://valkey:6379
+      FALLBACK_NUMBERS: +14802020751
+      AGENT_SESSION_TTL: 28800
     volumes:
       - ./data:/data
     networks:
       backend:
         aliases:
           - flask
+    depends_on:
+      valkey:
+        condition: service_healthy
     restart: unless-stopped
