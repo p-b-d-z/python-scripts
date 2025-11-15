@@ -8,11 +8,25 @@ import secrets
 import time
 from datetime import datetime
 from call_helper import (
-    initialize_cache, is_opted_out, add_to_opt_out, remove_from_opt_out,
-    get_active_agents, agent_login, agent_logout, get_agent_status, is_email_logged_in, obfuscate_email, get_phone_by_email, select_agent, record_agent_call, get_agent_stats_full, format_datetime
+    initialize_cache,
+    is_opted_out,
+    add_to_opt_out,
+    remove_from_opt_out,
+    get_active_agents,
+    agent_login,
+    agent_logout,
+    get_agent_status,
+    is_email_logged_in,
+    obfuscate_email,
+    get_phone_by_email,
+    select_agent,
+    record_agent_call,
+    get_agent_stats_full,
+    format_datetime,
 )
 from cache import Cache
 from cloudflare import get_cloudflare_user
+from slack import upload_voicemail
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
@@ -24,6 +38,12 @@ valkey_url = os.getenv('VALKEY_URL', 'redis://localhost:6379')
 agent_session_ttl = int(os.getenv('AGENT_SESSION_TTL', '28800'))  # 8 hours default
 initialize_cache(valkey_url, agent_session_ttl)
 
+# Load Slack users into cache
+from slack import load_slack_users
+
+load_slack_users()
+
+
 # Load HTML templates
 def load_template(filename):
     """Load HTML template from file"""
@@ -32,16 +52,17 @@ def load_template(filename):
             return html_file.read()
 
     except Exception as err:
-        logging.error(f"Error loading template {filename}: {err}")
-        return "<html><body>Error loading template</body></html>"
+        logging.error(f'Error loading template {filename}: {err}')
+        return '<html><body>Error loading template</body></html>'
+
 
 # Load SMS consent from root directory (existing file)
 try:
     with open('sms_consent.html', 'r', encoding='utf-8') as file:
         html_consent_content = file.read()
 except Exception as e:
-    logging.error(f"Error loading sms_consent.html: {e}")
-    html_consent_content = "<html><body>Error loading consent page</body></html>"
+    logging.error(f'Error loading sms_consent.html: {e}')
+    html_consent_content = '<html><body>Error loading consent page</body></html>'
 
 agent_login_template = load_template('agent_login.html')
 agent_login_error_template = load_template('agent_login_error.html')
@@ -63,13 +84,16 @@ fallback_numbers = os.getenv('FALLBACK_NUMBERS', '+14802020751').split(',')
 def home():
     return redirect('/status/agents')
 
+
 @app.route('/consent')
 def consent():
     return render_template_string(html_consent_content)
 
+
 @app.route('/privacy-policy')
 def privacy_policy():
     return render_template_string(privacy_policy_template)
+
 
 @app.route('/auth/agent', methods=['GET', 'POST'])
 def agent_auth():
@@ -87,13 +111,19 @@ def agent_auth():
         if agent_login(phone_number, user_email):
             return render_template_string(agent_login_success_template)
         else:
-            return render_template_string(agent_error_template.replace('{{ title }}', 'Agent Login Failed').replace('{{ message }}', 'Failed to log you in. Please try again.').replace('{{ link_url }}', '/auth/agent').replace('{{ link_text }}', 'Try Again'))
+            return render_template_string(
+                agent_error_template.replace('{{ title }}', 'Agent Login Failed')
+                .replace('{{ message }}', 'Failed to log you in. Please try again.')
+                .replace('{{ link_url }}', '/auth/agent')
+                .replace('{{ link_text }}', 'Try Again')
+            )
 
     # GET request - check if already logged in
     already_logged_in = user_email and is_email_logged_in(user_email)
 
     # Show login form with conditional content
     return render_template_string(agent_login_template, already_logged_in=already_logged_in, user_email=user_email)
+
 
 @app.route('/auth/agent/logout', methods=['GET', 'POST'])
 def agent_logout_route():
@@ -112,15 +142,23 @@ def agent_logout_route():
     if phone_number and agent_logout(phone_number):
         return render_template_string(agent_logout_success_template)
     else:
-        return render_template_string(agent_error_template.replace('{{ title }}', 'Agent Logout Failed').replace('{{ message }}', 'Failed to log you out. Please try again.').replace('{{ link_url }}', '/auth/agent/logout').replace('{{ link_text }}', 'Try Again'))
+        return render_template_string(
+            agent_error_template.replace('{{ title }}', 'Agent Logout Failed')
+            .replace('{{ message }}', 'Failed to log you out. Please try again.')
+            .replace('{{ link_url }}', '/auth/agent/logout')
+            .replace('{{ link_text }}', 'Try Again')
+        )
+
 
 @app.route('/status')
 def status_redirect():
     return redirect('/status/agents')
 
+
 @app.route('/status/agent')
 def status_agent_redirect():
     return redirect('/status/agents')
+
 
 @app.route('/status/agents')
 def agent_status():
@@ -130,7 +168,7 @@ def agent_status():
 
     # Determine next agent
     next_agent_phone = select_agent()
-    next_agent = "None"
+    next_agent = 'None'
     if next_agent_phone:
         for agent in agents:
             if agent['real_phone'] == next_agent_phone:
@@ -138,7 +176,14 @@ def agent_status():
                 break
 
     # Render template with agent data
-    return render_template_string(agent_status_template, agents=agents, agent_count=len(agents), current_time=current_time, next_agent=next_agent)
+    return render_template_string(
+        agent_status_template,
+        agents=agents,
+        agent_count=len(agents),
+        current_time=current_time,
+        next_agent=next_agent,
+    )
+
 
 @app.route('/auth/agent/stats')
 def agent_stats():
@@ -147,7 +192,13 @@ def agent_stats():
     current_time = format_datetime(time.time())
 
     # Render template with agent data
-    return render_template_string(agent_stats_template, agents=agents, agent_count=len(agents), current_time=current_time)
+    return render_template_string(
+        agent_stats_template,
+        agents=agents,
+        agent_count=len(agents),
+        current_time=current_time,
+    )
+
 
 @app.route('/incoming/voice', methods=['POST'])
 def incoming_voice():
@@ -159,9 +210,15 @@ def incoming_voice():
     logging.info(f'/incoming/voice | CallSid: {call_sid} From: {call_from} To: {call_to}')
     response.say('Thank you for contacting Tier 3 Consulting!', voice=ivr_voice)
     gather = Gather(num_digits=1, action='/incoming/voice/menu', method='POST')
-    gather.say('Press 1 now to leave a message, or stay on the line and we will connect you with a support agent.', voice=ivr_voice)
+    gather.say(
+        'Press 1 now to leave a message, or stay on the line and we will connect you with a support agent.',
+        voice=ivr_voice,
+    )
     response.append(gather)
-    response.say('I will now connect you to an agent, thank you for your patience!', voice=ivr_voice)
+    response.say(
+        'I will now connect you to an agent, thank you for your patience!',
+        voice=ivr_voice,
+    )
 
     # Try to connect to an active agent first
     agent_number = select_agent()
@@ -189,16 +246,22 @@ def incoming_voice_menu():
     response = VoiceResponse()
     if digit == '1':
         logging.info(f'CallSid: {call_sid} | User selected to leave a message')
-        response.say('Please leave your message after the beep. Press any key when you are done.', voice=ivr_voice)
+        response.say(
+            'Please leave your message after the beep. Press any key when you are done.',
+            voice=ivr_voice,
+        )
         response.record(
             action='/recording/save',
             max_length=120,
             play_beep=True,
-            finish_on_key='any'
+            finish_on_key='any',
         )
     else:
         logging.info(f'CallSid: {call_sid} | Connecting to agent (no digit pressed)')
-        response.say('I will now connect you to an agent, thank you for your patience!', voice=ivr_voice)
+        response.say(
+            'I will now connect you to an agent, thank you for your patience!',
+            voice=ivr_voice,
+        )
 
         # Try to connect to an active agent first
         agent_number = select_agent()
@@ -223,6 +286,8 @@ def incoming_voice_menu():
 def recording_complete():
     recording_url = request.form.get('RecordingUrl')
     recording_sid = request.form.get('RecordingSid')
+    call_from = request.form.get('From', '')
+    call_to = request.form.get('To', '') or request.form.get('Called', '')
     response = VoiceResponse()
     if recording_url and recording_sid:
         mp3_url = f'{recording_url}.mp3'
@@ -232,7 +297,13 @@ def recording_complete():
         with open(local_filename, 'wb') as f:
             f.write(file_data)
 
-        response.say('Thank you for your message, we will get back to you shortly. Have a great day!', voice=ivr_voice)
+        # Upload to Slack
+        upload_voicemail(local_filename, call_from, call_to, time.time())
+
+        response.say(
+            'Thank you for your message, we will get back to you shortly. Have a great day!',
+            voice=ivr_voice,
+        )
         response.hangup()
     else:
         response.say('No recording was received. Goodbye!', voice=ivr_voice)
@@ -303,7 +374,7 @@ def incoming_sms():
     return Response(str(resp), mimetype='text/xml')
 
 
-@app.route("/status/message", methods=['POST'])
+@app.route('/status/message', methods=['POST'])
 def message_status():
     message_sid = request.values.get('MessageSid', None)
     message_status = request.values.get('MessageStatus', None)

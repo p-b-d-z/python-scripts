@@ -1,0 +1,16 @@
+# Exclusions
+extend-exclude = []
+force-exclude = true
+# Allow line length of 120 (default: 88)
+line-length = 120
+
+[lint]
+ignore = [
+    "E402",  # ignore module level import
+    "E722",  # ignore bare except
+    "F841"  # ignore assigned but never used (commonly used with cf templating)
+]
+
+[format]
+# Use single quotes for non-triple-quoted strings (default: double)
+quote-style = "single"

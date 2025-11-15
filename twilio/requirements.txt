@@ -2,3 +2,5 @@ flask
 twilio
 requests
 redis
+slack_sdk
+webrequests

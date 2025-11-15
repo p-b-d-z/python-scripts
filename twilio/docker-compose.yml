@@ -34,22 +34,23 @@ services:
       frontend:
     restart: unless-stopped
   flask:
-    image: ivr:local
-    container_name: ivr_flask
-    command: python3 call_handler.py
-    environment:
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-      VALKEY_URL: redis://valkey:6379
-      FALLBACK_NUMBERS: +14802020751
-      AGENT_SESSION_TTL: 28800
-    volumes:
-      - ./data:/data
-    networks:
-      backend:
-        aliases:
-          - flask
-    depends_on:
-      valkey:
-        condition: service_healthy
-    restart: unless-stopped
+     image: ivr:local
+     container_name: ivr_flask
+     command: python3 call_handler.py
+     environment:
+       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
+       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+       SLACK_CHANNEL_ID: ${SLACK_CHANNEL_ID}
+       VALKEY_URL: redis://valkey:6379
+       FALLBACK_NUMBERS: +14802020751
+       AGENT_SESSION_TTL: 28800
+     volumes:
+       - ./data:/data
+     networks:
+       backend:
+         aliases:
+           - flask
+     depends_on:
+       valkey:
+         condition: service_healthy
+     restart: unless-stopped

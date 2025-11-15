@@ -10,6 +10,7 @@ Set managed_name to the record you want to maintain
 Run:
   python3 ./dynamic_dns.py
 """
+
 import csv
 import os
 import dns.resolver
@@ -35,38 +36,51 @@ client = CloudFlare(token=os.environ.get('CLOUDFLARE_API_TOKEN'))
 # Find the zone ID
 zone_id = None
 for zone in client.zones.get():
-  if zone['name'] == target_zone:
-    zone_id = zone['id']
-    break
+    if zone['name'] == target_zone:
+        zone_id = zone['id']
+        break
 if not zone_id:
-  raise RuntimeError(f'Zone {target_zone} not found')
+    raise RuntimeError(f'Zone {target_zone} not found')
 
 # Try to find the existing DNS record
 dns_record = None
 params = {'name': managed_name, 'type': 'A'}
 records = client.zones.dns_records.get(zone_id, params=params)
 if records:
-  dns_record = records[0]
+    dns_record = records[0]
 
 # Update record
 if dns_record:
-  record_id = dns_record['id']
-  result = client.zones.dns_records.put(
-    zone_id, record_id,
-    data={'type': 'A', 'name': managed_name, 'content': public_ip, 'ttl': 300, 'proxied': False}
-  )
-  print(f'Updated record {managed_name} to {public_ip}')
+    record_id = dns_record['id']
+    result = client.zones.dns_records.put(
+        zone_id,
+        record_id,
+        data={
+            'type': 'A',
+            'name': managed_name,
+            'content': public_ip,
+            'ttl': 300,
+            'proxied': False,
+        },
+    )
+    print(f'Updated record {managed_name} to {public_ip}')
 else:
-  result = client.zones.dns_records.post(
-    zone_id,
-    data={'type': 'A', 'name': managed_name, 'content': public_ip, 'ttl': 300, 'proxied': False}
-  )
-  print(f'Created record {managed_name} with IP {public_ip}')
+    result = client.zones.dns_records.post(
+        zone_id,
+        data={
+            'type': 'A',
+            'name': managed_name,
+            'content': public_ip,
+            'ttl': 300,
+            'proxied': False,
+        },
+    )
+    print(f'Created record {managed_name} with IP {public_ip}')
 
 # Write log file in CSV format
 with open(log_file, mode='a', newline='') as f:
-  writer = csv.writer(f)
-  if log_file_is_new:
-    writer.writerow(['timestamp', 'managed_record', 'public_ip'])
+    writer = csv.writer(f)
+    if log_file_is_new:
+        writer.writerow(['timestamp', 'managed_record', 'public_ip'])
 
-  writer.writerow([datetime.now().isoformat(), managed_name, public_ip])
+    writer.writerow([datetime.now().isoformat(), managed_name, public_ip])

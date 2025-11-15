@@ -3,10 +3,12 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 from cache import Cache
+from slack import post_agent_login, post_agent_logout
 
 # Initialize cache (will be set by call_handler.py)
 cache = None
 agent_session_ttl = None
+
 
 def initialize_cache(valkey_url, session_ttl):
     """Initialize the cache instance"""
@@ -15,6 +17,7 @@ def initialize_cache(valkey_url, session_ttl):
     agent_session_ttl = session_ttl
     # Load opt-out numbers from file on startup (migration/initialization)
     cache.load_opt_out_from_file()
+
 
 def obfuscate_email(email):
     """Obfuscate email by masking all but first two characters before @"""
@@ -25,6 +28,7 @@ def obfuscate_email(email):
         return f'{local}@{domain}'
     return f'{local[:2]}{"*" * (len(local) - 2)}@{domain}'
 
+
 def obfuscate_phone(phone):
     """Obfuscate phone by masking all but area code"""
     if not phone or len(phone) < 11:
@@ -32,10 +36,11 @@ def obfuscate_phone(phone):
     # Assuming +1XXXXXXXXXX -> +1 (XXX) ***-****
     return f'{phone[:2]} ({phone[2:5]}) ***-****'
 
+
 def format_datetime(timestamp):
     """Format timestamp to 'Nov 25 10:12am' in AZ MST"""
     if timestamp <= 0:
-        return "Never"
+        return 'Never'
     # Convert to AZ MST (UTC-7)
     dt_utc = datetime.fromtimestamp(timestamp, tz=timezone.utc)
     dt_mst = dt_utc.astimezone(timezone(timedelta(hours=-7)))
@@ -47,9 +52,10 @@ def format_datetime(timestamp):
     minute_ampm = hour_min[1]
     minute = minute_ampm[:-2]
     ampm = minute_ampm[-2:]
-    parts[2] = f"{hour}:{minute}{ampm}"
+    parts[2] = f'{hour}:{minute}{ampm}'
     formatted = ' '.join(parts)
     return formatted.replace('AM', 'am').replace('PM', 'pm')
+
 
 def validate_phone_number(phone_number):
     """Validate and normalize US phone number to E.164 format (+1XXXXXXXXXX)"""
@@ -95,6 +101,7 @@ def validate_phone_number(phone_number):
 
     return cleaned
 
+
 def is_opted_out(phone_number):
     """Check if phone number is opted out"""
     if not cache:
@@ -105,6 +112,7 @@ def is_opted_out(phone_number):
         return False
 
     return cache.is_opted_out(validated)
+
 
 def add_to_opt_out(phone_number):
     """Add phone number to opt-out list"""
@@ -117,6 +125,7 @@ def add_to_opt_out(phone_number):
 
     return cache.add_opt_out_number(validated)
 
+
 def remove_from_opt_out(phone_number):
     """Remove phone number from opt-out list"""
     if not cache:
@@ -128,12 +137,14 @@ def remove_from_opt_out(phone_number):
 
     return cache.remove_opt_out_number(validated)
 
+
 def get_active_agents():
     """Get list of active agent phone numbers"""
     if not cache:
         return []
 
     return cache.get_active_agents()
+
 
 def agent_login(phone_number, email=None):
     """Log in an agent"""
@@ -144,7 +155,11 @@ def agent_login(phone_number, email=None):
     if not validated:
         return False
 
-    return cache.agent_login(validated, agent_session_ttl, email)
+    success = cache.agent_login(validated, agent_session_ttl, email)
+    if success:
+        post_agent_login(validated, email)
+    return success
+
 
 def agent_logout(phone_number):
     """Log out an agent"""
@@ -155,7 +170,15 @@ def agent_logout(phone_number):
     if not validated:
         return False
 
-    return cache.agent_logout(validated)
+    # Get email before logout
+    agent_info = cache.get_agent_info(validated)
+    email = agent_info.get('email') if agent_info else None
+
+    success = cache.agent_logout(validated)
+    if success:
+        post_agent_logout(validated, email)
+    return success
+
 
 def is_agent_active(phone_number):
     """Check if agent is active"""
@@ -167,6 +190,7 @@ def is_agent_active(phone_number):
         return False
 
     return cache.is_agent_active(validated)
+
 
 def get_agent_status():
     """Get detailed status of all active agents"""
@@ -190,37 +214,40 @@ def get_agent_status():
 
                 # Format duration
                 if duration_seconds < 60:
-                    duration = f"{duration_seconds} seconds"
+                    duration = f'{duration_seconds} seconds'
                 elif duration_seconds < 3600:
                     minutes = duration_seconds // 60
                     seconds = duration_seconds % 60
-                    duration = f"{minutes} minute{'s' if minutes != 1 else ''}"
+                    duration = f'{minutes} minute{"s" if minutes != 1 else ""}'
                     if seconds > 0:
-                        duration += f" {seconds} second{'s' if seconds != 1 else ''}"
+                        duration += f' {seconds} second{"s" if seconds != 1 else ""}'
                 else:
                     hours = duration_seconds // 3600
                     minutes = (duration_seconds % 3600) // 60
-                    duration = f"{hours} hour{'s' if hours != 1 else ''}"
+                    duration = f'{hours} hour{"s" if hours != 1 else ""}'
                     if minutes > 0:
-                        duration += f" {minutes} minute{'s' if minutes != 1 else ''}"
+                        duration += f' {minutes} minute{"s" if minutes != 1 else ""}'
 
                 # Format login time
                 login_time = format_datetime(login_timestamp)
 
-                agents.append({
-                    'index': index,
-                    'name': obfuscate_email(agent_info.get('email', f'Agent {index}')),
-                    'phone': obfuscate_phone(phone),
-                    'real_phone': phone,
-                    'login_time': login_time,
-                    'duration': duration
-                })
+                agents.append(
+                    {
+                        'index': index,
+                        'name': obfuscate_email(agent_info.get('email', f'Agent {index}')),
+                        'phone': obfuscate_phone(phone),
+                        'real_phone': phone,
+                        'login_time': login_time,
+                        'duration': duration,
+                    }
+                )
 
         return agents
 
     except Exception as e:
-        logging.error(f"Error getting agent status: {e}")
+        logging.error(f'Error getting agent status: {e}')
         return []
+
 
 def is_email_logged_in(email):
     """Check if email is associated with an active agent"""
@@ -235,8 +262,9 @@ def is_email_logged_in(email):
                 return True
         return False
     except Exception as e:
-        logging.error(f"Error checking email login: {e}")
+        logging.error(f'Error checking email login: {e}')
         return False
+
 
 def get_phone_by_email(email):
     """Get phone number associated with email"""
@@ -251,8 +279,9 @@ def get_phone_by_email(email):
                 return phone
         return None
     except Exception as e:
-        logging.error(f"Error getting phone by email: {e}")
+        logging.error(f'Error getting phone by email: {e}')
         return None
+
 
 def select_agent():
     """Select the best agent based on metrics"""
@@ -283,17 +312,19 @@ def select_agent():
         agent_scores.sort(key=lambda x: (x[1], x[2]))
 
         selected_phone = agent_scores[0][0]
-        logging.info(f"Selected agent {selected_phone} with {agent_scores[0][1]} calls")
+        logging.info(f'Selected agent {selected_phone} with {agent_scores[0][1]} calls')
         return selected_phone
     except Exception as e:
-        logging.error(f"Error selecting agent: {e}")
+        logging.error(f'Error selecting agent: {e}')
         return None
+
 
 def record_agent_call(phone):
     """Record a call to an agent"""
     if not cache:
         return False
     return cache.record_agent_call(phone)
+
 
 def get_agent_stats_full():
     """Get full agent stats with metrics for authenticated view"""
@@ -318,19 +349,19 @@ def get_agent_stats_full():
 
                 # Format duration
                 if duration_seconds < 60:
-                    duration = f"{duration_seconds} seconds"
+                    duration = f'{duration_seconds} seconds'
                 elif duration_seconds < 3600:
                     minutes = duration_seconds // 60
                     seconds = duration_seconds % 60
-                    duration = f"{minutes} minute{'s' if minutes != 1 else ''}"
+                    duration = f'{minutes} minute{"s" if minutes != 1 else ""}'
                     if seconds > 0:
-                        duration += f" {seconds} second{'s' if seconds != 1 else ''}"
+                        duration += f' {seconds} second{"s" if seconds != 1 else ""}'
                 else:
                     hours = duration_seconds // 3600
                     minutes = (duration_seconds % 3600) // 60
-                    duration = f"{hours} hour{'s' if hours != 1 else ''}"
+                    duration = f'{hours} hour{"s" if hours != 1 else ""}'
                     if minutes > 0:
-                        duration += f" {minutes} minute{'s' if minutes != 1 else ''}"
+                        duration += f' {minutes} minute{"s" if minutes != 1 else ""}'
 
                 # Format login time
                 login_time = format_datetime(login_timestamp)
@@ -342,20 +373,22 @@ def get_agent_stats_full():
                 if last_call_timestamp > 0:
                     last_call_time = format_datetime(last_call_timestamp)
                 else:
-                    last_call_time = "Never"
+                    last_call_time = 'Never'
 
-                agents.append({
-                    'index': index,
-                    'name': agent_info.get('email', f'Agent {index}'),
-                    'phone': phone,
-                    'login_time': login_time,
-                    'duration': duration,
-                    'calls_count': calls_count,
-                    'last_call_time': last_call_time
-                })
+                agents.append(
+                    {
+                        'index': index,
+                        'name': agent_info.get('email', f'Agent {index}'),
+                        'phone': phone,
+                        'login_time': login_time,
+                        'duration': duration,
+                        'calls_count': calls_count,
+                        'last_call_time': last_call_time,
+                    }
+                )
 
         return agents
 
     except Exception as e:
-        logging.error(f"Error getting full agent stats: {e}")
+        logging.error(f'Error getting full agent stats: {e}')
         return []

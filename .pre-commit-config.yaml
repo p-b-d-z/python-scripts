@@ -1,0 +1,35 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+    -   id: check-yaml
+    -   id: check-merge-conflict
+    -   id: end-of-file-fixer
+        exclude: .py.j2|.yml.j2
+    -   id: mixed-line-ending
+        exclude: .py.j2|.yml.j2
+    -   id: trailing-whitespace
+        exclude: .py.j2|.yml.j2
+    -   id: check-shebang-scripts-are-executable
+        exclude: .py.j2|.yml.j2
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.5
+    hooks:
+    -   id: ruff
+        exclude: .py.j2|.yml.j2
+    -   id: ruff-format
+        exclude: .py.j2|.yml.j2
+-   repo: https://github.com/maxwinterstein/shfmt-py
+    rev: v3.12.0.1
+    hooks:
+    -   id: shfmt
+        exclude: .sh.j2
+        args:
+        -   -i
+        -   "4"
+        -   -w
+        -   "./scripts/"
+-   repo: https://github.com/pryorda/dockerfilelint-precommit-hooks
+    rev: v0.1.0
+    hooks:
+    -   id: dockerfilelint

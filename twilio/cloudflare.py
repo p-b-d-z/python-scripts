@@ -1,5 +1,6 @@
 import jwt
 
+
 def get_cloudflare_user(request):
     jwt_token = request.headers.get('Cf-Access-Jwt-Assertion')
     if not jwt_token:
