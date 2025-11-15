@@ -21,6 +21,11 @@ services:
     image: ivr:local
     container_name: ivr_flask
     command: python3 call_handler.py
+    environment:
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+    volumes:
+      - ./data:/data
     networks:
       backend:
         aliases:
