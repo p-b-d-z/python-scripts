@@ -1,9 +1,8 @@
-import os
 import time
 import logging
 from datetime import datetime, timezone, timedelta
 from cache import Cache
-from slack import post_agent_login, post_agent_logout
+from helper_slack import post_agent_login, post_agent_logout
 
 # Initialize cache (will be set by call_handler.py)
 cache = None

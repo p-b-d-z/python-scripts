@@ -6,27 +6,23 @@ import logging
 import os
 import secrets
 import time
-from datetime import datetime
-from call_helper import (
+from helper_functions import (
     initialize_cache,
     is_opted_out,
     add_to_opt_out,
     remove_from_opt_out,
-    get_active_agents,
     agent_login,
     agent_logout,
     get_agent_status,
     is_email_logged_in,
-    obfuscate_email,
     get_phone_by_email,
     select_agent,
     record_agent_call,
     get_agent_stats_full,
     format_datetime,
 )
-from cache import Cache
-from cloudflare import get_cloudflare_user
-from slack import upload_voicemail
+from helper_cloudflare import get_cloudflare_user
+from helper_slack import upload_voicemail
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
@@ -39,7 +35,7 @@ agent_session_ttl = int(os.getenv('AGENT_SESSION_TTL', '28800'))  # 8 hours defa
 initialize_cache(valkey_url, agent_session_ttl)
 
 # Load Slack users into cache
-from slack import load_slack_users
+from helper_slack import load_slack_users
 
 load_slack_users()
 
