@@ -5,11 +5,13 @@ import requests
 import logging
 import os
 import secrets
+import time
 from datetime import datetime
 from call_helper import (
     initialize_cache, is_opted_out, add_to_opt_out, remove_from_opt_out,
-    get_active_agents, agent_login, agent_logout, get_agent_status, is_email_logged_in, obfuscate_email, get_phone_by_email
+    get_active_agents, agent_login, agent_logout, get_agent_status, is_email_logged_in, obfuscate_email, get_phone_by_email, select_agent, record_agent_call, get_agent_stats_full, format_datetime
 )
+from cache import Cache
 from cloudflare import get_cloudflare_user
 
 logging.basicConfig(level=logging.INFO)
@@ -48,6 +50,7 @@ agent_logout_template = load_template('agent_logout.html')
 agent_logout_success_template = load_template('agent_logout_success.html')
 agent_error_template = load_template('agent_error.html')
 agent_status_template = load_template('agent_status.html')
+agent_stats_template = load_template('agent_stats.html')
 privacy_policy_template = load_template('privacy_policy.html')
 
 # Configuration
@@ -123,33 +126,69 @@ def status_agent_redirect():
 def agent_status():
     """Display status of all active agents"""
     agents = get_agent_status()
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    current_time = format_datetime(time.time())
+
+    # Determine next agent
+    next_agent_phone = select_agent()
+    next_agent = "None"
+    if next_agent_phone:
+        for agent in agents:
+            if agent['real_phone'] == next_agent_phone:
+                next_agent = agent['name']
+                break
 
     # Render template with agent data
-    return render_template_string(agent_status_template, agents=agents, agent_count=len(agents), current_time=current_time)
+    return render_template_string(agent_status_template, agents=agents, agent_count=len(agents), current_time=current_time, next_agent=next_agent)
+
+@app.route('/auth/agent/stats')
+def agent_stats():
+    """Display detailed agent stats for authenticated users"""
+    agents = get_agent_stats_full()
+    current_time = format_datetime(time.time())
+
+    # Render template with agent data
+    return render_template_string(agent_stats_template, agents=agents, agent_count=len(agents), current_time=current_time)
 
 @app.route('/incoming/voice', methods=['POST'])
 def incoming_voice():
     response = VoiceResponse()
     logging.debug(f'/incoming/voice | form: {request.form}')
+    call_sid = request.form.get('CallSid', '')
     call_to = request.form.get('Called', '')
     call_from = request.form.get('From', '')
-    logging.info(f'/incoming/voice | From: {call_from} To: {call_to}')
+    logging.info(f'/incoming/voice | CallSid: {call_sid} From: {call_from} To: {call_to}')
     response.say('Thank you for contacting Tier 3 Consulting!', voice=ivr_voice)
     gather = Gather(num_digits=1, action='/incoming/voice/menu', method='POST')
     gather.say('Press 1 now to leave a message, or stay on the line and we will connect you with a support agent.', voice=ivr_voice)
     response.append(gather)
     response.say('I will now connect you to an agent, thank you for your patience!', voice=ivr_voice)
-    response.dial('+14802020751')
+
+    # Try to connect to an active agent first
+    agent_number = select_agent()
+    if agent_number:
+        # Record the call
+        record_agent_call(agent_number)
+        logging.info(f'CallSid: {call_sid} | Connecting to selected agent: {agent_number}')
+        response.dial(agent_number)
+    else:
+        # Fall back to configured fallback numbers
+        logging.info(f'CallSid: {call_sid} | No active agents, using fallback numbers: {fallback_numbers}')
+        # Dial the first fallback number (could implement simultaneous dialing later)
+        if fallback_numbers:
+            fallback_number = fallback_numbers[0].strip()
+            logging.info(f'CallSid: {call_sid} | Dialing fallback number: {fallback_number}')
+            response.dial(fallback_number)
 
     return Response(str(response), mimetype='text/xml')
 
 
 @app.route('/incoming/voice/menu', methods=['POST'])
 def incoming_voice_menu():
+    call_sid = request.form.get('CallSid', '')
     digit = request.form.get('Digits', '')
     response = VoiceResponse()
     if digit == '1':
+        logging.info(f'CallSid: {call_sid} | User selected to leave a message')
         response.say('Please leave your message after the beep. Press any key when you are done.', voice=ivr_voice)
         response.record(
             action='/recording/save',
@@ -158,21 +197,24 @@ def incoming_voice_menu():
             finish_on_key='any'
         )
     else:
+        logging.info(f'CallSid: {call_sid} | Connecting to agent (no digit pressed)')
         response.say('I will now connect you to an agent, thank you for your patience!', voice=ivr_voice)
 
         # Try to connect to an active agent first
-        active_agents = get_active_agents()
-        if active_agents:
-            # Use the first available agent (could implement round-robin later)
-            agent_number = active_agents[0]
-            logging.info(f'Connecting to active agent: {agent_number}')
+        agent_number = select_agent()
+        if agent_number:
+            # Record the call
+            record_agent_call(agent_number)
+            logging.info(f'CallSid: {call_sid} | Connecting to selected agent: {agent_number}')
             response.dial(agent_number)
         else:
             # Fall back to configured fallback numbers
-            logging.info(f'No active agents, using fallback numbers: {fallback_numbers}')
+            logging.info(f'CallSid: {call_sid} | No active agents, using fallback numbers: {fallback_numbers}')
             # Dial the first fallback number (could implement simultaneous dialing later)
             if fallback_numbers:
-                response.dial(fallback_numbers[0].strip())
+                fallback_number = fallback_numbers[0].strip()
+                logging.info(f'CallSid: {call_sid} | Dialing fallback number: {fallback_number}')
+                response.dial(fallback_number)
 
     return Response(str(response), mimetype='text/xml')
 

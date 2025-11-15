@@ -152,6 +152,8 @@ class Cache:
             if email:
                 agent_data["email"] = email
             self.redis_client.setex(agent_key, ttl, json.dumps(agent_data))
+            # Initialize metrics
+            self.init_agent_metrics(phone, ttl)
             logger.info(f"Agent {phone} logged in with email {email}")
             return True
         except Exception as e:
@@ -169,6 +171,8 @@ class Cache:
         try:
             agent_key = f"agent:{phone}"
             result = self.redis_client.delete(agent_key)
+            # Clear metrics
+            self.clear_agent_metrics(phone)
             if result > 0:
                 logger.info(f"Agent {phone} logged out")
             return result > 0
@@ -206,6 +210,83 @@ class Cache:
         except Exception as e:
             logger.error(f"Error getting agent info: {e}")
             return None
+
+    def init_agent_metrics(self, phone: str, ttl: int):
+        """Initialize agent metrics if not exist"""
+        metrics_key = f"agent_metrics:{phone}"
+        if not self.redis_client.exists(metrics_key):
+            metrics = {
+                "calls_count": 0,
+                "last_call_time": 0
+            }
+            self.redis_client.setex(metrics_key, ttl, json.dumps(metrics))
+
+    def record_agent_call(self, phone: str) -> bool:
+        """Record a call routed to an agent"""
+        if not phone:
+            return False
+
+        if not self._ensure_connection():
+            return False
+
+        try:
+            metrics_key = f"agent_metrics:{phone}"
+            data = self.redis_client.get(metrics_key)
+            if data:
+                metrics = json.loads(data)
+            else:
+                metrics = {"calls_count": 0, "last_call_time": 0}
+
+            metrics["calls_count"] += 1
+            metrics["last_call_time"] = int(time.time())
+            self.redis_client.setex(metrics_key, 28800, json.dumps(metrics))  # Reset TTL
+            logger.info(f"Recorded call for agent {phone}")
+            return True
+        except Exception as e:
+            logger.error(f"Error recording agent call: {e}")
+            return False
+
+    def get_agent_metrics(self, phone: str) -> Optional[dict]:
+        """Get agent metrics"""
+        if not phone:
+            return None
+
+        if not self._ensure_connection():
+            return None
+
+        try:
+            metrics_key = f"agent_metrics:{phone}"
+            data = self.redis_client.get(metrics_key)
+            return json.loads(data) if data else None
+        except Exception as e:
+            logger.error(f"Error getting agent metrics: {e}")
+            return None
+
+    def clear_agent_metrics(self, phone: str) -> bool:
+        """Clear agent metrics"""
+        if not phone:
+            return False
+
+        if not self._ensure_connection():
+            return False
+
+        try:
+            metrics_key = f"agent_metrics:{phone}"
+            result = self.redis_client.delete(metrics_key)
+            return result > 0
+        except Exception as e:
+            logger.error(f"Error clearing agent metrics: {e}")
+            return False
+
+    def get_all_agent_metrics(self) -> dict:
+        """Get metrics for all active agents"""
+        active_agents = self.get_active_agents()
+        metrics = {}
+        for phone in active_agents:
+            m = self.get_agent_metrics(phone)
+            if m:
+                metrics[phone] = m
+        return metrics
 
     # Health check
     def health_check(self) -> bool:

@@ -1,6 +1,7 @@
 import os
 import time
-from datetime import datetime
+import logging
+from datetime import datetime, timezone, timedelta
 from cache import Cache
 
 # Initialize cache (will be set by call_handler.py)
@@ -30,6 +31,25 @@ def obfuscate_phone(phone):
         return phone
     # Assuming +1XXXXXXXXXX -> +1 (XXX) ***-****
     return f'{phone[:2]} ({phone[2:5]}) ***-****'
+
+def format_datetime(timestamp):
+    """Format timestamp to 'Nov 25 10:12am' in AZ MST"""
+    if timestamp <= 0:
+        return "Never"
+    # Convert to AZ MST (UTC-7)
+    dt_utc = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    dt_mst = dt_utc.astimezone(timezone(timedelta(hours=-7)))
+    formatted = dt_mst.strftime('%b %d %I:%M%p')
+    # Remove leading zero from hour
+    parts = formatted.split()
+    hour_min = parts[2].split(':')
+    hour = hour_min[0].lstrip('0') or '12'
+    minute_ampm = hour_min[1]
+    minute = minute_ampm[:-2]
+    ampm = minute_ampm[-2:]
+    parts[2] = f"{hour}:{minute}{ampm}"
+    formatted = ' '.join(parts)
+    return formatted.replace('AM', 'am').replace('PM', 'pm')
 
 def validate_phone_number(phone_number):
     """Validate and normalize US phone number to E.164 format (+1XXXXXXXXXX)"""
@@ -185,13 +205,13 @@ def get_agent_status():
                         duration += f" {minutes} minute{'s' if minutes != 1 else ''}"
 
                 # Format login time
-                login_datetime = datetime.fromtimestamp(login_timestamp)
-                login_time = login_datetime.strftime('%Y-%m-%d %H:%M:%S')
+                login_time = format_datetime(login_timestamp)
 
                 agents.append({
                     'index': index,
                     'name': obfuscate_email(agent_info.get('email', f'Agent {index}')),
                     'phone': obfuscate_phone(phone),
+                    'real_phone': phone,
                     'login_time': login_time,
                     'duration': duration
                 })
@@ -199,7 +219,7 @@ def get_agent_status():
         return agents
 
     except Exception as e:
-        print(f"Error getting agent status: {e}")
+        logging.error(f"Error getting agent status: {e}")
         return []
 
 def is_email_logged_in(email):
@@ -215,7 +235,7 @@ def is_email_logged_in(email):
                 return True
         return False
     except Exception as e:
-        print(f"Error checking email login: {e}")
+        logging.error(f"Error checking email login: {e}")
         return False
 
 def get_phone_by_email(email):
@@ -231,5 +251,111 @@ def get_phone_by_email(email):
                 return phone
         return None
     except Exception as e:
-        print(f"Error getting phone by email: {e}")
+        logging.error(f"Error getting phone by email: {e}")
         return None
+
+def select_agent():
+    """Select the best agent based on metrics"""
+    if not cache:
+        return None
+
+    try:
+        active_phones = cache.get_active_agents()
+        if not active_phones:
+            return None
+
+        # Get metrics for each agent
+        agent_scores = []
+        for phone in active_phones:
+            # Ensure metrics exist for existing agents
+            cache.init_agent_metrics(phone, 28800)
+            metrics = cache.get_agent_metrics(phone)
+            if metrics:
+                calls = metrics.get('calls_count', 0)
+                last_time = metrics.get('last_call_time', 0)
+            else:
+                # Fallback, though init should have created
+                calls = 0
+                last_time = 0
+            agent_scores.append((phone, calls, last_time))
+
+        # Sort by calls (asc), then last_time (asc)
+        agent_scores.sort(key=lambda x: (x[1], x[2]))
+
+        selected_phone = agent_scores[0][0]
+        logging.info(f"Selected agent {selected_phone} with {agent_scores[0][1]} calls")
+        return selected_phone
+    except Exception as e:
+        logging.error(f"Error selecting agent: {e}")
+        return None
+
+def record_agent_call(phone):
+    """Record a call to an agent"""
+    if not cache:
+        return False
+    return cache.record_agent_call(phone)
+
+def get_agent_stats_full():
+    """Get full agent stats with metrics for authenticated view"""
+    if not cache:
+        return []
+
+    try:
+        active_phones = cache.get_active_agents()
+        if not active_phones:
+            return []
+
+        agents = []
+        current_time = time.time()
+        metrics = cache.get_all_agent_metrics()
+
+        for index, phone in enumerate(active_phones, 1):
+            agent_info = cache.get_agent_info(phone)
+            if agent_info:
+                # Calculate duration
+                login_timestamp = agent_info.get('login_time', current_time)
+                duration_seconds = int(current_time - login_timestamp)
+
+                # Format duration
+                if duration_seconds < 60:
+                    duration = f"{duration_seconds} seconds"
+                elif duration_seconds < 3600:
+                    minutes = duration_seconds // 60
+                    seconds = duration_seconds % 60
+                    duration = f"{minutes} minute{'s' if minutes != 1 else ''}"
+                    if seconds > 0:
+                        duration += f" {seconds} second{'s' if seconds != 1 else ''}"
+                else:
+                    hours = duration_seconds // 3600
+                    minutes = (duration_seconds % 3600) // 60
+                    duration = f"{hours} hour{'s' if hours != 1 else ''}"
+                    if minutes > 0:
+                        duration += f" {minutes} minute{'s' if minutes != 1 else ''}"
+
+                # Format login time
+                login_time = format_datetime(login_timestamp)
+
+                # Get metrics
+                agent_metrics = metrics.get(phone, {})
+                calls_count = agent_metrics.get('calls_count', 0)
+                last_call_timestamp = agent_metrics.get('last_call_time', 0)
+                if last_call_timestamp > 0:
+                    last_call_time = format_datetime(last_call_timestamp)
+                else:
+                    last_call_time = "Never"
+
+                agents.append({
+                    'index': index,
+                    'name': agent_info.get('email', f'Agent {index}'),
+                    'phone': phone,
+                    'login_time': login_time,
+                    'duration': duration,
+                    'calls_count': calls_count,
+                    'last_call_time': last_call_time
+                })
+
+        return agents
+
+    except Exception as e:
+        logging.error(f"Error getting full agent stats: {e}")
+        return []

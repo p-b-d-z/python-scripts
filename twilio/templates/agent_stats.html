@@ -1,22 +1,21 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Agent Status</title>
+    <title>Agent Stats</title>
     <meta http-equiv="refresh" content="30">
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-    <div class="container">
+    <div class="container wide-container">
         <div class="header">
             <img src="/static/logo.png" alt="Tier 3 Consulting Logo" class="logo">
-            <h1>Agent Status Dashboard</h1>
-            <p>Real-time overview of active agents</p>
+            <h1>Agent Stats Dashboard</h1>
+            <p>Detailed metrics for authenticated users</p>
         </div>
 
         <div class="status-info">
             <strong>Active Agents:</strong> {{ agent_count }}<br>
-            <strong>Last Updated:</strong> {{ current_time }}<br>
-            <strong>Next Agent:</strong> {{ next_agent }}
+            <strong>Last Updated:</strong> {{ current_time }}
         </div>
 
         {% if agents %}
@@ -27,6 +26,8 @@
                     <th>Phone Number</th>
                     <th>Login Time</th>
                     <th>Duration</th>
+                    <th>Calls Count</th>
+                    <th>Last Call Time</th>
                 </tr>
             </thead>
             <tbody>
@@ -36,6 +37,8 @@
                     <td class="phone-number">{{ agent.phone }}</td>
                     <td class="login-time">{{ agent.login_time }}</td>
                     <td class="duration">{{ agent.duration }}</td>
+                    <td>{{ agent.calls_count }}</td>
+                    <td>{{ agent.last_call_time }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -52,11 +55,9 @@
         </div>
 
         <div class="nav-links">
-            <a href="/auth/agent">Login</a>
-            <a href="/auth/agent/logout">Logout</a>
-            <a href="/status/agents">Status</a>
+            <a href="/status/agents">Public Status</a>
+            <a href="/auth/agent/logout">Agent Logout</a>
             <a href="/consent">Consent</a>
-            <a href="/auth/agent/stats">Agent Stats</a>
         </div>
     </div>
 </body>
