@@ -11,6 +11,14 @@
             <h1>Agent Login</h1>
             <p>Secure access to the IVR system</p>
         </div>
+        {% if already_logged_in %}
+        <div class="success-message">
+            <p>You are already logged in as {{ user_email }}.</p>
+        </div>
+        <form method="post" action="/auth/agent/logout">
+            <button type="submit" class="logout-button">Logout</button>
+        </form>
+        {% else %}
         <p>Enter your phone number to register as an available agent.</p>
         <form method="post">
             <div class="form-group">
@@ -19,9 +27,10 @@
             </div>
             <button type="submit">Login as Agent</button>
         </form>
+        {% endif %}
         <div class="nav-links">
             <a href="/consent">Consent</a>
-            <a href="/">Home</a>
+            <a href="/status/agents">Status</a>
         </div>
     </div>
 </body>

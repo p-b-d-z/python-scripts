@@ -133,7 +133,7 @@ class Cache:
             logger.error(f"Error getting active agents: {e}")
             return []
 
-    def agent_login(self, phone: str, ttl: int = 28800) -> bool:
+    def agent_login(self, phone: str, ttl: int = 28800, email: Optional[str] = None) -> bool:
         """Log in an agent (phone number)"""
         if not phone:
             return False
@@ -149,8 +149,10 @@ class Cache:
                 "login_time": int(time.time()),
                 "status": "active"
             }
+            if email:
+                agent_data["email"] = email
             self.redis_client.setex(agent_key, ttl, json.dumps(agent_data))
-            logger.info(f"Agent {phone} logged in")
+            logger.info(f"Agent {phone} logged in with email {email}")
             return True
         except Exception as e:
             logger.error(f"Error logging in agent: {e}")

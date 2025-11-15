@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime
 from call_helper import (
     initialize_cache, is_opted_out, add_to_opt_out, remove_from_opt_out,
-    get_active_agents, agent_login, agent_logout, get_agent_status
+    get_active_agents, agent_login, agent_logout, get_agent_status, is_email_logged_in, obfuscate_email, get_phone_by_email
 )
 from cloudflare import get_cloudflare_user
 
@@ -72,6 +72,8 @@ def privacy_policy():
 def agent_auth():
     whoami = get_cloudflare_user(request)
     logging.info(f'Cloudflare user: {whoami}')
+    user_email = whoami.get('email') if whoami else None
+
     if request.method == 'POST':
         phone_number = request.form.get('phone_number', '').strip()
 
@@ -79,18 +81,27 @@ def agent_auth():
             return render_template_string(agent_login_error_template)
 
         # Validate and login agent
-        if agent_login(phone_number):
+        if agent_login(phone_number, user_email):
             return render_template_string(agent_login_success_template)
         else:
             return render_template_string(agent_error_template.replace('{{ title }}', 'Agent Login Failed').replace('{{ message }}', 'Failed to log you in. Please try again.').replace('{{ link_url }}', '/auth/agent').replace('{{ link_text }}', 'Try Again'))
 
-    # GET request - show login form
-    return render_template_string(agent_login_template)
+    # GET request - check if already logged in
+    already_logged_in = user_email and is_email_logged_in(user_email)
+
+    # Show login form with conditional content
+    return render_template_string(agent_login_template, already_logged_in=already_logged_in, user_email=user_email)
 
 @app.route('/auth/agent/logout', methods=['GET', 'POST'])
 def agent_logout_route():
+    whoami = get_cloudflare_user(request)
+    user_email = whoami.get('email') if whoami else None
+
     if request.method == 'POST':
         phone_number = request.form.get('phone_number', '').strip()
+        # If no phone provided but email, find associated phone
+        if not phone_number and user_email:
+            phone_number = get_phone_by_email(user_email)
     else:
         # For GET requests, show logout form
         return render_template_string(agent_logout_template)

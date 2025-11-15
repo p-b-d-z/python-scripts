@@ -15,6 +15,22 @@ def initialize_cache(valkey_url, session_ttl):
     # Load opt-out numbers from file on startup (migration/initialization)
     cache.load_opt_out_from_file()
 
+def obfuscate_email(email):
+    """Obfuscate email by masking all but first two characters before @"""
+    if not email or '@' not in email:
+        return email
+    local, domain = email.split('@', 1)
+    if len(local) <= 2:
+        return f'{local}@{domain}'
+    return f'{local[:2]}{"*" * (len(local) - 2)}@{domain}'
+
+def obfuscate_phone(phone):
+    """Obfuscate phone by masking all but area code"""
+    if not phone or len(phone) < 11:
+        return phone
+    # Assuming +1XXXXXXXXXX -> +1 (XXX) ***-****
+    return f'{phone[:2]} ({phone[2:5]}) ***-****'
+
 def validate_phone_number(phone_number):
     """Validate and normalize US phone number to E.164 format (+1XXXXXXXXXX)"""
     if not phone_number:
@@ -99,7 +115,7 @@ def get_active_agents():
 
     return cache.get_active_agents()
 
-def agent_login(phone_number):
+def agent_login(phone_number, email=None):
     """Log in an agent"""
     if not cache:
         return False
@@ -108,7 +124,7 @@ def agent_login(phone_number):
     if not validated:
         return False
 
-    return cache.agent_login(validated, agent_session_ttl)
+    return cache.agent_login(validated, agent_session_ttl, email)
 
 def agent_logout(phone_number):
     """Log out an agent"""
@@ -174,8 +190,8 @@ def get_agent_status():
 
                 agents.append({
                     'index': index,
-                    'name': f'Agent {index}',
-                    'phone': phone,
+                    'name': obfuscate_email(agent_info.get('email', f'Agent {index}')),
+                    'phone': obfuscate_phone(phone),
                     'login_time': login_time,
                     'duration': duration
                 })
@@ -185,3 +201,35 @@ def get_agent_status():
     except Exception as e:
         print(f"Error getting agent status: {e}")
         return []
+
+def is_email_logged_in(email):
+    """Check if email is associated with an active agent"""
+    if not cache or not email:
+        return False
+
+    try:
+        active_phones = cache.get_active_agents()
+        for phone in active_phones:
+            agent_info = cache.get_agent_info(phone)
+            if agent_info and agent_info.get('email') == email:
+                return True
+        return False
+    except Exception as e:
+        print(f"Error checking email login: {e}")
+        return False
+
+def get_phone_by_email(email):
+    """Get phone number associated with email"""
+    if not cache or not email:
+        return None
+
+    try:
+        active_phones = cache.get_active_agents()
+        for phone in active_phones:
+            agent_info = cache.get_agent_info(phone)
+            if agent_info and agent_info.get('email') == email:
+                return phone
+        return None
+    except Exception as e:
+        print(f"Error getting phone by email: {e}")
+        return None
