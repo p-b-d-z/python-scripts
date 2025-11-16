@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from slack_sdk import WebClient
 import redis
-from helper_functions import validate_phone_number
+from helper_validation import validate_phone_number
 
 logging.basicConfig(level=logging.DEBUG)
 
