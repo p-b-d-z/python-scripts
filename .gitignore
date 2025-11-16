@@ -10,3 +10,5 @@ twilio/data/valkey/*
 # Aii i i i i i i
 AGENTS.md
 .cursorrules
+# Virtualenv
+venv
