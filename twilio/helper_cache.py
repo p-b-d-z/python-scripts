@@ -1,11 +1,11 @@
-import redis
 import json
 import os
 import time
 import logging
 from typing import Set, List, Optional
+import redis
 
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class Cache:
@@ -20,7 +20,7 @@ class Cache:
             self.redis_client.ping()
             return True
         except redis.ConnectionError:
-            logger.error('Redis connection failed')
+            logging.error('Redis connection failed')
             return False
 
     # Opt-out management methods
@@ -33,7 +33,7 @@ class Cache:
             numbers = self.redis_client.smembers(self.opt_out_key)
             return set(numbers) if numbers else set()
         except Exception as e:
-            logger.error(f'Error getting opt-out numbers: {e}')
+            logging.error(f'Error getting opt-out numbers: {e}')
             return set()
 
     def add_opt_out_number(self, phone: str) -> bool:
@@ -50,7 +50,7 @@ class Cache:
             self._persist_opt_out_to_file()
             return result > 0
         except Exception as e:
-            logger.error(f'Error adding opt-out number: {e}')
+            logging.error(f'Error adding opt-out number: {e}')
             return False
 
     def remove_opt_out_number(self, phone: str) -> bool:
@@ -67,7 +67,7 @@ class Cache:
             self._persist_opt_out_to_file()
             return result > 0
         except Exception as e:
-            logger.error(f'Error removing opt-out number: {e}')
+            logging.error(f'Error removing opt-out number: {e}')
             return False
 
     def is_opted_out(self, phone: str) -> bool:
@@ -81,7 +81,7 @@ class Cache:
         try:
             return self.redis_client.sismember(self.opt_out_key, phone)
         except Exception as e:
-            logger.error(f'Error checking opt-out status: {e}')
+            logging.error(f'Error checking opt-out status: {e}')
             return False
 
     def _persist_opt_out_to_file(self):
@@ -93,7 +93,7 @@ class Cache:
                 for number in sorted(numbers):
                     f.write(f'{number}\n')
         except Exception as e:
-            logger.error(f'Error persisting opt-out to file: {e}')
+            logging.error(f'Error persisting opt-out to file: {e}')
 
     def load_opt_out_from_file(self):
         """Load opt-out numbers from file into cache (for migration/initialization)"""
@@ -110,7 +110,7 @@ class Cache:
                     if numbers:
                         self.redis_client.sadd(self.opt_out_key, *numbers)
         except Exception as e:
-            logger.error(f'Error loading opt-out from file: {e}')
+            logging.error(f'Error loading opt-out from file: {e}')
 
     # Agent management methods
     def get_active_agents(self) -> List[str]:
@@ -131,7 +131,7 @@ class Cache:
 
             return active_agents
         except Exception as e:
-            logger.error(f'Error getting active agents: {e}')
+            logging.error(f'Error getting active agents: {e}')
             return []
 
     def agent_login(self, phone: str, ttl: int = 28800, email: Optional[str] = None) -> bool:
@@ -155,10 +155,10 @@ class Cache:
             self.redis_client.setex(agent_key, ttl, json.dumps(agent_data))
             # Initialize metrics
             self.init_agent_metrics(phone, ttl)
-            logger.info(f'Agent {phone} logged in with email {email}')
+            logging.info(f'Agent {phone} logged in with email {email}')
             return True
         except Exception as e:
-            logger.error(f'Error logging in agent: {e}')
+            logging.error(f'Error logging in agent: {e}')
             return False
 
     def agent_logout(self, phone: str) -> bool:
@@ -175,10 +175,10 @@ class Cache:
             # Clear metrics
             self.clear_agent_metrics(phone)
             if result > 0:
-                logger.info(f'Agent {phone} logged out')
+                logging.info(f'Agent {phone} logged out')
             return result > 0
         except Exception as e:
-            logger.error(f'Error logging out agent: {e}')
+            logging.error(f'Error logging out agent: {e}')
             return False
 
     def is_agent_active(self, phone: str) -> bool:
@@ -193,7 +193,7 @@ class Cache:
             agent_key = f'agent:{phone}'
             return self.redis_client.exists(agent_key)
         except Exception as e:
-            logger.error(f'Error checking agent status: {e}')
+            logging.error(f'Error checking agent status: {e}')
             return False
 
     def get_agent_info(self, phone: str) -> Optional[dict]:
@@ -209,7 +209,7 @@ class Cache:
             data = self.redis_client.get(agent_key)
             return json.loads(data) if data else None
         except Exception as e:
-            logger.error(f'Error getting agent info: {e}')
+            logging.error(f'Error getting agent info: {e}')
             return None
 
     def init_agent_metrics(self, phone: str, ttl: int):
@@ -238,10 +238,10 @@ class Cache:
             metrics['calls_count'] += 1
             metrics['last_call_time'] = int(time.time())
             self.redis_client.setex(metrics_key, 28800, json.dumps(metrics))  # Reset TTL
-            logger.info(f'Recorded call for agent {phone}')
+            logging.info(f'Recorded call for agent {phone}')
             return True
         except Exception as e:
-            logger.error(f'Error recording agent call: {e}')
+            logging.error(f'Error recording agent call: {e}')
             return False
 
     def get_agent_metrics(self, phone: str) -> Optional[dict]:
@@ -257,7 +257,7 @@ class Cache:
             data = self.redis_client.get(metrics_key)
             return json.loads(data) if data else None
         except Exception as e:
-            logger.error(f'Error getting agent metrics: {e}')
+            logging.error(f'Error getting agent metrics: {e}')
             return None
 
     def clear_agent_metrics(self, phone: str) -> bool:
@@ -273,7 +273,7 @@ class Cache:
             result = self.redis_client.delete(metrics_key)
             return result > 0
         except Exception as e:
-            logger.error(f'Error clearing agent metrics: {e}')
+            logging.error(f'Error clearing agent metrics: {e}')
             return False
 
     def get_all_agent_metrics(self) -> dict:

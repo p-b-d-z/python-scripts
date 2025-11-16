@@ -1,11 +1,13 @@
-from flask import Flask, request, session, Response, render_template_string, redirect
-from twilio.twiml.messaging_response import MessagingResponse
-from twilio.twiml.voice_response import VoiceResponse, Gather
 import requests
 import logging
 import os
 import secrets
 import time
+import json
+import redis
+from flask import Flask, request, session, Response, render_template_string, redirect
+from twilio.twiml.messaging_response import MessagingResponse
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from helper_functions import (
     initialize_cache,
     is_opted_out,
@@ -23,8 +25,9 @@ from helper_functions import (
 )
 from helper_cloudflare import get_cloudflare_user
 from helper_slack import upload_voicemail
+from helper_freshdesk import get_contact_metadata
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 app.static_folder = 'static'
@@ -32,12 +35,28 @@ app.static_folder = 'static'
 # Initialize cache
 valkey_url = os.getenv('VALKEY_URL', 'redis://localhost:6379')
 agent_session_ttl = int(os.getenv('AGENT_SESSION_TTL', '28800'))  # 8 hours default
+redis_client = redis.from_url(valkey_url, decode_responses=True)
 initialize_cache(valkey_url, agent_session_ttl)
 
 # Load Slack users into cache
 from helper_slack import load_slack_users
 
 load_slack_users()
+
+# Cache Freshdesk data if API key is set
+if os.getenv('FRESHDESK_API_KEY'):
+    from helper_freshdesk import list_agents, list_contacts
+
+    try:
+        status, agents = list_agents()
+        if status == 200:
+            redis_client.setex('freshdesk_agents', 86400, json.dumps(agents))
+        status, contacts = list_contacts()
+        if status == 200:
+            redis_client.setex('freshdesk_contacts', 86400, json.dumps(contacts))
+        logging.info('Freshdesk data cached successfully')
+    except Exception as e:
+        logging.error(f'Failed to cache Freshdesk data: {e}')
 
 
 # Load HTML templates
@@ -204,6 +223,8 @@ def incoming_voice():
     call_to = request.form.get('Called', '')
     call_from = request.form.get('From', '')
     logging.info(f'/incoming/voice | CallSid: {call_sid} From: {call_from} To: {call_to}')
+    metadata = get_contact_metadata(call_from)
+    logging.info(f'Caller metadata: {json.dumps(metadata)}')
     response.say('Thank you for contacting Tier 3 Consulting!', voice=ivr_voice)
     gather = Gather(num_digits=1, action='/incoming/voice/menu', method='POST')
     gather.say(
@@ -320,6 +341,8 @@ def incoming_sms():
     user_response = request.form.get('Body', '').strip().lower()
     logging.info(f'/incoming/sms | {request.form}')
     logging.info(f'/incoming/sms | [{from_number}] {user_response}')
+    metadata = get_contact_metadata(from_number)
+    logging.info(f'SMS sender metadata: {json.dumps(metadata)}')
     resp = MessagingResponse()
     # OPT-IN via "START"
     if user_response == 'start':

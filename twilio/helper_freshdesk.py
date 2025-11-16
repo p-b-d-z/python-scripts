@@ -2,61 +2,19 @@ import http.client
 import json
 import base64
 import os
-from dotenv import load_dotenv
+import redis
+import logging
 
-# Load environment
-load_dotenv()
 api_key = os.environ.get('FRESHDESK_API_KEY')
 domain = os.environ.get('FRESHDESK_DOMAIN', 'tier3.freshdesk.com')
 if not api_key:
-    raise ValueError("FRESHDESK_API_KEY environment variable is required")
+    raise ValueError('FRESHDESK_API_KEY environment variable is required')
 
 conn = http.client.HTTPSConnection(domain)
-
-
-def validate_phone_number(phone_number):
-    """Validate and normalize US phone number to E.164 format (+1XXXXXXXXXX)"""
-    if not phone_number:
-        return None
-
-    # Check for invalid characters (only digits, spaces, dashes, dots, parentheses, and + allowed)
-    allowed_chars = set("0123456789 +-().")
-    if not all(c in allowed_chars for c in phone_number):
-        return None
-
-    # Remove all non-digit characters except +
-    cleaned = "".join(c for c in phone_number if c.isdigit() or c == "+")
-
-    # Handle different input formats
-    if cleaned.startswith("+1"):
-        # Already in E.164 format
-        if len(cleaned) != 12:  # +1 + 10 digits
-            return None
-        digits_only = cleaned[2:]
-    elif len(cleaned) == 10:
-        # 10-digit US number without country code, add +1
-        cleaned = "+1" + cleaned
-        digits_only = cleaned[2:]
-    elif len(cleaned) == 11 and cleaned.startswith("1"):
-        # 11-digit number starting with 1, add +
-        cleaned = "+" + cleaned
-        digits_only = cleaned[2:]
-    else:
-        return None
-
-    # Ensure all characters are digits
-    if not all(c.isdigit() for c in digits_only):
-        return None
-
-    # Validate area code (first 3 digits): cannot start with 0 or 1
-    if digits_only[0] in ("0", "1"):
-        return None
-
-    # Validate exchange code (digits 4-6): cannot start with 0 or 1
-    if digits_only[3] in ("0", "1"):
-        return None
-
-    return cleaned
+logging.basicConfig(level=logging.DEBUG)
+# Valkey client for caching
+valkey_url = os.environ.get('VALKEY_URL', 'redis://localhost:6379')
+redis_client = redis.from_url(valkey_url, decode_responses=True)
 
 
 def filter_dict(d, fields):
@@ -77,6 +35,51 @@ def reformat_phones(data):
                 contact['phone'] = validate_phone_number(contact['phone']) or contact['phone']
             if 'mobile' in contact and contact['mobile']:
                 contact['mobile'] = validate_phone_number(contact['mobile']) or contact['mobile']
+
+
+def validate_phone_number(phone_number):
+    """Validate and normalize US phone number to E.164 format (+1XXXXXXXXXX)"""
+    if not phone_number:
+        return None
+
+    # Check for invalid characters (only digits, spaces, dashes, dots, parentheses, and + allowed)
+    allowed_chars = set('0123456789 +-().')
+    if not all(c in allowed_chars for c in phone_number):
+        return None
+
+    # Remove all non-digit characters except +
+    cleaned = ''.join(c for c in phone_number if c.isdigit() or c == '+')
+
+    # Handle different input formats
+    if cleaned.startswith('+1'):
+        # Already in E.164 format
+        if len(cleaned) != 12:  # +1 + 10 digits
+            return None
+        digits_only = cleaned[2:]
+    elif len(cleaned) == 10:
+        # 10-digit US number without country code, add +1
+        cleaned = '+1' + cleaned
+        digits_only = cleaned[2:]
+    elif len(cleaned) == 11 and cleaned.startswith('1'):
+        # 11-digit number starting with 1, add +
+        cleaned = '+' + cleaned
+        digits_only = cleaned[2:]
+    else:
+        return None
+
+    # Ensure all characters are digits
+    if not all(c.isdigit() for c in digits_only):
+        return None
+
+    # Validate area code (first 3 digits): cannot start with 0 or 1
+    if digits_only[0] in ('0', '1'):
+        return None
+
+    # Validate exchange code (digits 4-6): cannot start with 0 or 1
+    if digits_only[3] in ('0', '1'):
+        return None
+
+    return cleaned
 
 
 def freshdesk_create_ticket(details, email='user@example.com'):
@@ -159,33 +162,76 @@ def list_contacts():
     return response.status, parsed
 
 
+def get_contact_metadata(phone):
+    """Get metadata for a phone number from cached Freshdesk data"""
+    normalized = validate_phone_number(phone)
+    if not normalized:
+        return {'phone': phone, 'matches': []}
+
+    try:
+        agents_data = redis_client.get('freshdesk_agents')
+        contacts_data = redis_client.get('freshdesk_contacts')
+        agents = json.loads(agents_data) if agents_data else []
+        contacts = json.loads(contacts_data) if contacts_data else []
+    except Exception as e:
+        logging.error(f'Failed to load cached Freshdesk data: {e}')
+        return {'phone': normalized, 'matches': []}
+
+    matches = []
+    # Check agents
+    for agent in agents:
+        contact = agent.get('contact', {})
+        if contact.get('phone') == normalized or contact.get('mobile') == normalized:
+            matches.append(
+                {
+                    'type': 'agent',
+                    'id': agent.get('id'),
+                    'name': contact.get('name'),
+                    'email': contact.get('email'),
+                    'available': agent.get('available'),
+                }
+            )
+    # Check contacts
+    for contact in contacts:
+        if contact.get('phone') == normalized or contact.get('mobile') == normalized:
+            matches.append(
+                {
+                    'type': 'contact',
+                    'id': contact.get('id'),
+                    'name': contact.get('name'),
+                    'email': contact.get('email'),
+                }
+            )
+    return {'phone': normalized, 'matches': matches}
+
+
 if __name__ == '__main__':
-    print(f"Using domain: {domain}")
-    print(f"API key set: {bool(api_key)}")
-    print("Listing agents:")
+    print(f'Using domain: {domain}')
+    print(f'API key set: {bool(api_key)}')
+    print('Listing agents:')
     status, agent_data = list_agents()
-    print(f"Status: {status}")
+    print(f'Status: {status}')
     if isinstance(agent_data, list) and agent_data:
         print(f'Agents found: {len(agent_data)}')
-        print("First agent:", agent_data[0])
+        print('First agent:', agent_data[0])
     else:
-        print("No agents or error")
+        print('No agents or error')
 
-    print("\nListing companies:")
+    print('\nListing companies:')
     status, company_data = list_companies()
-    print(f"Status: {status}")
+    print(f'Status: {status}')
     if isinstance(company_data, list) and company_data:
         print(f'Companies found: {len(company_data)}')
-        print("First company:", company_data[0])
+        print('First company:', company_data[0])
     else:
-        print("No companies or error")
+        print('No companies or error')
 
-    print("\nListing contacts:")
+    print('\nListing contacts:')
     status, contact_data = list_contacts()
-    print(f"Status: {status}")
+    print(f'Status: {status}')
     if isinstance(contact_data, list) and contact_data:
         print(f'Contacts found: {len(contact_data)}')
-        print("First contact:", contact_data[0])
+        print('First contact:', contact_data[0])
         for contact in contact_data:
             contact_name = contact['name']
             if contact.get('mobile'):
@@ -194,4 +240,4 @@ if __name__ == '__main__':
                 print(f'Contact phone: {contact["phone"]}')
 
     else:
-        print("No contacts or error")
+        print('No contacts or error')
