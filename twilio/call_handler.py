@@ -322,9 +322,14 @@ def recording_complete():
         recording_uid = int(os.getenv('RECORDING_UID', '1000'))
         recording_gid = int(os.getenv('RECORDING_GID', '1000'))
         os.chown(local_filename, recording_uid, recording_gid)
+
+        # Get caller metadata
+        metadata = get_contact_metadata(call_from)
+        matches = metadata.get('matches', [])
+
         # Upload to Slack
         logging.info(f'Recording saved to {local_filename}, sending to Slack.')
-        upload_voicemail(local_filename, call_from, call_to, time.time())
+        upload_voicemail(local_filename, call_from, call_to, time.time(), matches)
         response.say(
             'Thank you for your message, we will get back to you shortly. Have a great day!',
             voice=ivr_voice,

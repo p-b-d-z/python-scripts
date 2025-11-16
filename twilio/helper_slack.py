@@ -126,24 +126,51 @@ def get_display_name(phone: str, email: str = None):
     return email if email else 'Unknown Agent'
 
 
-def upload_voicemail(file_path: str, call_from: str, call_to: str, timestamp: float):
-    """Upload voicemail MP3 to Slack with metadata"""
+def upload_voicemail(file_path: str, call_from: str, call_to: str, timestamp: float, matches=None):
+    """Upload voicemail MP3 to Slack with metadata and threaded replies for matches"""
     if not client or not slack_channel_id:
         logging.debug('Slack not configured, skipping voicemail upload')
         return
 
-    logging.info(f'Uploading voicemail to channel {slack_channel_id}')
+    if matches is None:
+        matches = []
+
     try:
+        logging.info(f'Uploading voicemail to channel {slack_channel_id}')
         dt = datetime.fromtimestamp(timestamp)
         formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S MST')
         initial_comment = f'Voicemail from {call_from} to {call_to} at {formatted_time}'
+
+        # Upload file
         with open(file_path, 'rb') as file:
-            client.files_upload_v2(
-                channel=slack_channel_id,
+            upload_response = client.files_upload_v2(
                 file=file,
                 title=f'Voicemail from {call_from}',
-                initial_comment=initial_comment,
             )
-        logging.info(f'Uploaded voicemail to Slack: {initial_comment}')
+        permalink = upload_response['file']['permalink']
+        logging.info(f'Uploaded voicemail file, permalink: {permalink}')
+
+        # Post message with permalink
+        message_text = f'{initial_comment}\n<{permalink}|Voicemail MP3>'
+        message_response = client.chat_postMessage(
+            channel=slack_channel_id,
+            text=message_text
+        )
+        ts = message_response['ts']
+        logging.info(f'Posted voicemail message to Slack with ts: {ts}')
+
+        # Post threaded replies for matches
+        for match in matches:
+            contact_type = match['type'].capitalize()
+            name = match.get('name', 'Unknown')
+            email = match.get('email', 'Unknown')
+            reply_text = f'*Freshdesk {contact_type}*\n```\nName: {name}\nEmail: {email}\n```'
+            client.chat_postMessage(
+                channel=slack_channel_id,
+                text=reply_text,
+                thread_ts=ts
+            )
+            logging.info(f'Posted metadata reply in thread: {reply_text}')
+
     except Exception as e:
         logging.error(f'Failed to upload voicemail to Slack: {e}')
