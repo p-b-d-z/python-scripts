@@ -226,18 +226,13 @@ def incoming_voice():
     logging.info(f'/incoming/voice | CallSid: {call_sid} From: {call_from} To: {call_to}')
     metadata = get_contact_metadata(call_from)
     logging.info(f'Caller metadata: {json.dumps(metadata)}')
-    response.say('Thank you for contacting Tier 3 Consulting!', voice=ivr_voice)
+    response.play('https://ivr.tier3.app/static/prompts/thank_you_for_contacting_tier3.mp3')
     gather = Gather(num_digits=1, action='/incoming/voice/menu', method='POST')
-    gather.say(
-        'Press 1 now to leave a message, or stay on the line and we will connect you with a support agent.',
-        voice=ivr_voice,
-    )
+    gather.play('https://ivr.tier3.app/static/prompts/press_1_now_to_leave_a_message_or_stay.mp3')
+    gather.play('https://ivr.tier3.app/static/prompts/and_we_will_connect_you.mp3')
     response.append(gather)
-    response.say(
-        'I will now connect you to an agent, thank you for your patience!',
-        voice=ivr_voice,
-    )
-
+    response.play('https://ivr.tier3.app/static/prompts/i_will_now_connect_you_to_an_agent.mp3')
+    response.play('https://ivr.tier3.app/static/prompts/thank_you_for_your_patience.mp3')
     # Try to connect to an active agent first
     agent_number = select_agent()
     if agent_number:
@@ -264,10 +259,8 @@ def incoming_voice_menu():
     response = VoiceResponse()
     if digit == '1':
         logging.info(f'CallSid: {call_sid} | User selected to leave a message')
-        response.say(
-            'Please leave your message after the beep. Press any key when you are done.',
-            voice=ivr_voice,
-        )
+        response.play('https://ivr.tier3.app/static/prompts/please_leave_your_message_after_beep.mp3')
+        response.play('https://ivr.tier3.app/static/prompts/press_any_key_when_done.mp3')
         response.record(
             action='/recording/save',
             max_length=120,
@@ -276,10 +269,8 @@ def incoming_voice_menu():
         )
     else:
         logging.info(f'CallSid: {call_sid} | Connecting to agent (no digit pressed)')
-        response.say(
-            'I will now connect you to an agent, thank you for your patience!',
-            voice=ivr_voice,
-        )
+        response.play('https://ivr.tier3.app/static/prompts/i_will_now_connect_you_to_an_agent.mp3')
+        response.play('https://ivr.tier3.app/static/prompts/thank_you_for_your_patience.mp3')
 
         # Try to connect to an active agent first
         agent_number = select_agent()
@@ -330,13 +321,11 @@ def recording_complete():
         # Upload to Slack
         logging.info(f'Recording saved to {local_filename}, sending to Slack.')
         upload_voicemail(local_filename, call_from, call_to, time.time(), matches)
-        response.say(
-            'Thank you for your message, we will get back to you shortly. Have a great day!',
-            voice=ivr_voice,
-        )
+        response.play('https://ivr.tier3.app/static/prompts/thank_you_for_your_message.mp3')
+        response.play('https://ivr.tier3.app/static/prompts/we_will_get_back_to_you_shortly.mp3')
         response.hangup()
     else:
-        response.say('No recording was received. Goodbye!', voice=ivr_voice)
+        response.play('https://ivr.tier3.app/static/prompts/bad_connection_goodbye.mp3')
         response.hangup()
     return Response(str(response), mimetype='text/xml')
 
